@@ -87,7 +87,9 @@ uptime-guardian/
 │   ├── api_gateway/       # FastAPI REST API (CRUD monitors, auth, stats)
 │   ├── scheduler/         # Redis ZSET distributed scheduler -> RabbitMQ producer
 │   ├── checker/           # Async HTTP/SSL/DNS worker with idempotency control
-│   └── alerter/           # Telegram alert service with state machine & cooldown
+│   ├── alerter/           # Telegram alert service with state machine & cooldown
+│   ├── common/            # Shared ORM models, database sessions, and Anti-SSRF
+│   └── dashboard/         # React + Vite + Tailwind CSS monitoring dashboard
 ├── docker/                # Local development & production Docker Compose configs
 ├── tests/                 # Integration tests, unit tests, and k6 benchmark scripts
 ├── ROADMAP.md             # Engineering release roadmap (Milestones 1–3)

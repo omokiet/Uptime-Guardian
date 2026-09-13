@@ -50,10 +50,14 @@ ENV/
 # Private Notes & Interview Prep
 .notes/
 
-# Node.js
+# Node.js & Vite Dashboard
 node_modules/
 dist/
+.vite/
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
 # Terraform
 .terraform/

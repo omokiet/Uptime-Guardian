@@ -88,7 +88,9 @@ uptime-guardian/
 │   ├── api_gateway/       # FastAPI REST API (CRUD monitors, auth, stats)
 │   ├── scheduler/         # Redis ZSET distributed scheduler -> RabbitMQ producer
 │   ├── checker/           # Async HTTP/SSL/DNS worker với cơ chế Idempotency
-│   └── alerter/           # Telegram alert service với state machine & cooldown
+│   ├── alerter/           # Telegram alert service với state machine & cooldown
+│   ├── common/            # Module dùng chung (ORM models, database, Anti-SSRF)
+│   └── dashboard/         # Giao diện dashboard React + Vite + Tailwind CSS
 ├── docker/                # Docker Compose cho dev và production
 ├── tests/                 # Integration tests, unit tests, và benchmark k6
 ├── ROADMAP.vi.md          # Lộ trình kỹ thuật 3 mốc release
