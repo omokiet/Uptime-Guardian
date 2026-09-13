@@ -72,10 +72,11 @@
 - [ ] **Performance Benchmarks (k6):**
   - High-throughput load testing verifying scheduler dispatch and worker processing rates.
   - Baseline documentation in README: Sustained checks/sec capacity, resource utilization, and latency percentiles.
-- [ ] **Production React Dashboard (React 18 + Vite + Tailwind CSS):**
-  - Dedicated branch: `feature/react-dashboard` branched from `staging`.
-  - Visualization: 30-day uptime history timeline (discrete status blocks from `hourly_uptime_summary`), latency chart (p50/p95/p99 RTT over time with Chart.js / Recharts).
-  - Modern, responsive architecture with clean state management and Tailwind CSS design tokens.
+- [x] **Production React Dashboard (React 18 + Vite + Tailwind CSS):**
+  - Dedicated branch: `feature/UI` branched from `staging`.
+  - Clean SaaS design system: Neutral dark theme, unified English locale, and subtle micro-interactions.
+  - Visualization: Latency chart with Recharts, SSL expiration tracking, live status chips, and CRUD modals.
+  - Production build verified: TypeScript strict typechecking, 0 errors, optimized bundle (612 kB).
 
 ---
 

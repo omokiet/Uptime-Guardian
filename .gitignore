@@ -49,6 +49,8 @@ ENV/
 
 # Private Notes & Interview Prep
 .notes/
+HANDOFF.md
+CHECKLIST*.md
 
 # Node.js & Vite Dashboard
 node_modules/

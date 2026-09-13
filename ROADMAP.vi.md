@@ -72,10 +72,11 @@
 - [ ] **Benchmark Chịu Tải (k6):**
   - Kịch bản k6 đo lường thông lượng scheduler dispatch và tốc độ tiêu thụ của worker.
   - Ghi nhận số liệu baseline trong README: Năng lực xử lý checks/giây, tài nguyên tiêu thụ và độ trễ p50/p95/p99.
-- [ ] **Giao Diện Production React Dashboard (React 18 + Vite + Tailwind CSS):**
-  - Nhánh riêng: `feature/react-dashboard` tách từ `staging`.
-  - Trực quan hóa: Thanh lịch sử uptime 30 ngày (lấy từ dữ liệu rollup `hourly_uptime_summary`), biểu đồ độ trễ p50/p95/p99 theo thời gian với Chart.js / Recharts.
-  - Kiến trúc hiện đại, responsive, quản lý trạng thái sạch sẽ với Tailwind CSS tokens.
+- [x] **Giao Diện Production React Dashboard (React 18 + Vite + Tailwind CSS):**
+  - Nhánh riêng: `feature/UI` tách từ `staging`.
+  - Thiết kế SaaS tối giản: Bảng màu Dark Zinc thanh lịch, đồng bộ 100% tiếng Anh chuẩn quốc tế và vi tương tác tinh tế.
+  - Trực quan hóa: Biểu đồ độ trễ Recharts, theo dõi hạn chứng chỉ SSL, live status chips và form CRUD quản trị.
+  - Xác thực biên dịch: TypeScript strict mode 0 lỗi, bundle tối ưu (612 kB).
 
 ---
 
