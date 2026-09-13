@@ -1,5 +1,7 @@
 # Uptime Guardian — Technical Roadmap & Release Milestones
 
+**English** | [Tiếng Việt](ROADMAP.vi.md)
+
 > **Vision:** Building a resilient, self-hosted, distributed uptime and certificate monitoring platform engineered to demonstrate core distributed systems patterns: non-blocking scheduling, idempotent processing, finite state machines, and end-to-end SRE observability.
 
 ---
@@ -70,6 +72,10 @@
 - [ ] **Performance Benchmarks (k6):**
   - High-throughput load testing verifying scheduler dispatch and worker processing rates.
   - Baseline documentation in README: Sustained checks/sec capacity, resource utilization, and latency percentiles.
+- [ ] **Production React Dashboard (React 18 + Vite + Tailwind CSS):**
+  - Dedicated branch: `feature/react-dashboard` branched from `staging`.
+  - Visualization: 30-day uptime history timeline (discrete status blocks from `hourly_uptime_summary`), latency chart (p50/p95/p99 RTT over time with Chart.js / Recharts).
+  - Modern, responsive architecture with clean state management and Tailwind CSS design tokens.
 
 ---
 

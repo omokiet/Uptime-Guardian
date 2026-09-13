@@ -1,5 +1,7 @@
 # Uptime Guardian — System Architecture & Technical Specification
 
+**English** | [Tiếng Việt](SPEC.vi.md)
+
 > **Status:** Active / Production Design  
 > **Document Type:** System Architecture RFC & Engineering Specification  
 > **Target System:** Distributed, Fault-Tolerant Uptime & Certificate Monitoring Engine
@@ -10,7 +12,7 @@
 
 ### 1.1 Problem Statement
 Real-world web services experience localized network partitions, sudden DNS failures, unexpected SSL certificate expirations, and transient degradation. Standard monitoring tools often suffer from:
-1. **Alert Fatigue (Báo động giả):** Single-packet drops triggering panic alerts.
+1. **Alert Fatigue:** Single-packet drops triggering panic alerts.
 2. **Database Contention:** Polling databases with `SELECT ... WHERE next_run <= NOW()` causing table locks and IOPS exhaustion at scale.
 3. **Duplicate Processing & Race Conditions:** Distributed workers picking the same target or sending duplicate alerts when network latency spikes.
 4. **Data Bloat:** Unbounded accumulation of raw ping telemetry degrading query performance over time.
