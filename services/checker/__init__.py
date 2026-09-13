@@ -1,0 +1,1 @@
+"""Checker worker service package."""
