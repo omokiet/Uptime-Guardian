@@ -1,0 +1,1 @@
+"""Alerter worker service package."""
