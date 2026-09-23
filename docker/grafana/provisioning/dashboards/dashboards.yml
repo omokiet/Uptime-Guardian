@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: "Uptime Guardian Dashboards"
+    orgId: 1
+    folder: "Uptime Guardian"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

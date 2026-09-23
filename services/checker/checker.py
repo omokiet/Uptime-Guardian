@@ -8,6 +8,11 @@ from typing import Optional, Tuple
 from urllib.parse import urlparse
 import httpx
 from services.common.database import AsyncSessionLocal
+from services.common.metrics import (
+    CHECKER_CHECKS_TOTAL,
+    CHECKER_CHECK_DURATION_SECONDS,
+    CHECKER_SSL_DAYS_REMAINING,
+)
 from services.common.models import CheckResult
 from services.common.rabbitmq import publish_message
 from services.common.redis_client import get_redis_client
@@ -118,6 +123,15 @@ async def process_check_job(payload: dict) -> bool:
         timeout_seconds=timeout_seconds,
         expected_status_code=expected_status_code,
     )
+
+    CHECKER_CHECKS_TOTAL.labels(
+        method=method,
+        status="success" if is_success else "failure",
+    ).inc()
+    if latency_ms is not None:
+        CHECKER_CHECK_DURATION_SECONDS.labels(method=method).observe(latency_ms / 1000.0)
+    if ssl_days is not None:
+        CHECKER_SSL_DAYS_REMAINING.labels(monitor_id=monitor_id_str).set(ssl_days)
 
     m_uuid = uuid.UUID(monitor_id_str)
     j_uuid = uuid.UUID(job_id_str)
