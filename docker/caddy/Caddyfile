@@ -1,0 +1,34 @@
+{
+    admin off
+}
+
+{$DOMAIN:localhost} {
+    @local host localhost 127.0.0.1 ::1
+    handle @local {
+        tls internal
+    }
+
+    handle /api/* {
+        reverse_proxy api-gateway:8000
+    }
+
+    handle /health {
+        reverse_proxy api-gateway:8000
+    }
+
+    handle /metrics {
+        reverse_proxy api-gateway:8000
+    }
+
+    handle {
+        reverse_proxy dashboard:80
+    }
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+
+    encode gzip zstd
+}

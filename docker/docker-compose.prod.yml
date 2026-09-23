@@ -1,0 +1,228 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: uptime-caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api-gateway
+      - dashboard
+    logging: *default-logging
+
+  dashboard:
+    build:
+      context: ../services/dashboard
+      dockerfile: Dockerfile
+    container_name: uptime-dashboard
+    restart: always
+    expose:
+      - "80"
+    logging: *default-logging
+
+  migration:
+    build:
+      context: ..
+      dockerfile: services/api_gateway/Dockerfile
+    container_name: uptime-migration
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-uptime_guardian}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *default-logging
+
+  api-gateway:
+    build:
+      context: ..
+      dockerfile: services/api_gateway/Dockerfile
+    container_name: uptime-api-gateway
+    restart: always
+    expose:
+      - "8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-uptime_guardian}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redispassword}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    logging: *default-logging
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: services/scheduler/Dockerfile
+    container_name: uptime-scheduler
+    restart: always
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-uptime_guardian}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redispassword}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    logging: *default-logging
+
+  checker:
+    build:
+      context: ..
+      dockerfile: services/checker/Dockerfile
+    container_name: uptime-checker
+    restart: always
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-uptime_guardian}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redispassword}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
+    deploy:
+      resources:
+        limits:
+          cpus: '0.75'
+          memory: 512M
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    logging: *default-logging
+
+  alerter:
+    build:
+      context: ..
+      dockerfile: services/alerter/Dockerfile
+    container_name: uptime-alerter
+    restart: always
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-uptime_guardian}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redispassword}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_DEFAULT_CHAT_ID: ${TELEGRAM_DEFAULT_CHAT_ID:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    logging: *default-logging
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: uptime-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-uptime_guardian}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-uptime_guardian}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    container_name: uptime-redis
+    restart: always
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redispassword} --appendonly yes
+    volumes:
+      - redis_prod_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redispassword}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: uptime-rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+    volumes:
+      - rabbitmq_prod_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: uptime-prometheus
+    restart: always
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_prod_data:/prometheus
+    depends_on:
+      - api-gateway
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: uptime-grafana
+    restart: always
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_prod_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    logging: *default-logging
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_prod_data:
+  redis_prod_data:
+  rabbitmq_prod_data:
+  prometheus_prod_data:
+  grafana_prod_data:
