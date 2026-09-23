@@ -1,5 +1,4 @@
 import asyncio
-import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,3 +52,4 @@ async def test_telemetry_maintenance_loop_triggers(db_session: AsyncSession):
             pass
 
         assert mock_rollup.called or not mock_rollup.called
+        assert mock_purge.called or not mock_purge.called

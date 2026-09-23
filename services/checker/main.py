@@ -1,6 +1,5 @@
 import asyncio
 import json
-import aio_pika
 from services.checker.checker import process_check_job
 from services.common.config import settings
 from services.common.rabbitmq import close_rabbitmq, get_rabbitmq_connection

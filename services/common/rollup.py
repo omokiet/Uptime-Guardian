@@ -23,7 +23,7 @@ async def aggregate_hourly_uptime(
         select(
             CheckResult.monitor_id,
             func.count(CheckResult.id).label("total_checks"),
-            func.sum(case((CheckResult.is_success == True, 1), else_=0)).label("success_checks"),
+            func.sum(case((CheckResult.is_success.is_(True), 1), else_=0)).label("success_checks"),
             func.coalesce(func.avg(CheckResult.response_time_ms), 0).label("avg_rtt"),
         )
         .where(

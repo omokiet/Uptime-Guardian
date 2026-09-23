@@ -2,8 +2,6 @@ from httpx import AsyncClient
 import pytest
 from prometheus_client import REGISTRY
 from services.common.metrics import (
-    API_HTTP_REQUESTS_TOTAL,
-    API_HTTP_REQUEST_DURATION_SECONDS,
     CHECKER_CHECKS_TOTAL,
     CHECKER_CHECK_DURATION_SECONDS,
     SCHEDULER_DISPATCHED_JOBS_TOTAL,

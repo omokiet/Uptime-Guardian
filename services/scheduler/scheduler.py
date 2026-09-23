@@ -12,7 +12,8 @@ from services.common.rabbitmq import publish_message
 from services.common.redis_client import get_redis_client
 from services.common.rollup import aggregate_hourly_uptime, purge_old_check_results
 
-# Atomic Lua script: fetch items <= now_ms and lease them ahead to prevent race condition across multiple scheduler replicas
+# Atomic Lua script: fetch items <= now_ms and lease them ahead
+# to prevent race conditions across multiple scheduler replicas
 LUA_SCHEDULE_POP = """
 local key = KEYS[1]
 local max_score = tonumber(ARGV[1])
@@ -32,7 +33,7 @@ async def sync_active_monitors_to_redis() -> None:
     now_ms = int(time.time() * 1000)
 
     async with AsyncSessionLocal() as session:
-        stmt = select(Monitor).where(Monitor.is_active == True)
+        stmt = select(Monitor).where(Monitor.is_active.is_(True))
         result = await session.execute(stmt)
         monitors = result.scalars().all()
 

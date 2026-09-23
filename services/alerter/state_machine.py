@@ -1,7 +1,6 @@
 import asyncio
 import time
 import uuid
-from typing import Optional
 import httpx
 from sqlalchemy import select
 from services.common.config import settings
@@ -32,7 +31,7 @@ async def notify_channels(monitor_id: uuid.UUID, monitor_name: str, message: str
     async with AsyncSessionLocal() as session:
         stmt = select(AlertConfig).where(
             AlertConfig.monitor_id == monitor_id,
-            AlertConfig.is_enabled == True,
+            AlertConfig.is_enabled.is_(True),
         )
         result = await session.execute(stmt)
         configs = result.scalars().all()

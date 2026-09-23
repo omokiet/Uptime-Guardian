@@ -1,6 +1,5 @@
 import asyncio
 import datetime
-import socket
 import ssl
 import time
 import uuid
@@ -22,8 +21,6 @@ from services.common.ssrf import SSRFValidationError, validate_target_url
 async def check_ssl_days(hostname: str, port: int = 443, timeout: float = 5.0) -> Optional[int]:
     try:
         context = ssl.create_default_context()
-        loop = asyncio.get_running_loop()
-        
         async with asyncio.timeout(timeout):
             reader, writer = await asyncio.open_connection(
                 hostname,

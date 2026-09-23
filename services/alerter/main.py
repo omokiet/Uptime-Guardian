@@ -1,6 +1,5 @@
 import asyncio
 import json
-import aio_pika
 from services.alerter.state_machine import handle_alert_event
 from services.common.config import settings
 from services.common.rabbitmq import close_rabbitmq, get_rabbitmq_connection
