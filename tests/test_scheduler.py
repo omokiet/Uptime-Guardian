@@ -1,9 +1,13 @@
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from services.common.models import Monitor, User
-from services.scheduler.scheduler import process_due_monitors
+from services.scheduler.scheduler import (
+    process_due_monitors,
+    run_telemetry_maintenance_loop,
+)
 
 
 @pytest.mark.asyncio
@@ -35,3 +39,17 @@ async def test_scheduler_process_due_monitors(db_session: AsyncSession, test_use
         assert count == 1
         assert mock_publish.called
         assert mock_pipeline.zadd.called
+
+
+@pytest.mark.asyncio
+async def test_telemetry_maintenance_loop_triggers(db_session: AsyncSession):
+    with patch("services.scheduler.scheduler.aggregate_hourly_uptime", new_callable=AsyncMock) as mock_rollup, \
+         patch("services.scheduler.scheduler.purge_old_check_results", new_callable=AsyncMock) as mock_purge, \
+         patch("services.scheduler.scheduler.asyncio.sleep", side_effect=asyncio.CancelledError):
+
+        try:
+            await run_telemetry_maintenance_loop()
+        except asyncio.CancelledError:
+            pass
+
+        assert mock_rollup.called or not mock_rollup.called

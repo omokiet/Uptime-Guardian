@@ -1,13 +1,16 @@
 import asyncio
 import time
 import uuid
-from typing import List
+from datetime import datetime, timezone
+from typing import List, Optional
 from sqlalchemy import select
 from services.common.config import settings
 from services.common.database import AsyncSessionLocal
+from services.common.metrics import SCHEDULER_DISPATCHED_JOBS_TOTAL
 from services.common.models import Monitor
 from services.common.rabbitmq import publish_message
 from services.common.redis_client import get_redis_client
+from services.common.rollup import aggregate_hourly_uptime, purge_old_check_results
 
 # Atomic Lua script: fetch items <= now_ms and lease them ahead to prevent race condition across multiple scheduler replicas
 LUA_SCHEDULE_POP = """
@@ -94,6 +97,7 @@ async def process_due_monitors(limit: int = 100) -> int:
             "expected_status_code": monitor.expected_status_code,
         }
         await publish_message(settings.RABBITMQ_QUEUE_CHECK_JOBS, payload)
+        SCHEDULER_DISPATCHED_JOBS_TOTAL.inc()
 
     await pipe.execute()
     return len(parsed_ids)
@@ -108,3 +112,25 @@ async def run_scheduler_loop() -> None:
                 await asyncio.sleep(1)
         except Exception:
             await asyncio.sleep(1)
+
+
+async def run_telemetry_maintenance_loop() -> None:
+    last_rollup_hour: Optional[int] = None
+    last_retention_day: Optional[int] = None
+
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            if now.minute >= 5 and last_rollup_hour != now.hour:
+                async with AsyncSessionLocal() as session:
+                    await aggregate_hourly_uptime(session)
+                last_rollup_hour = now.hour
+
+            if now.hour == 3 and now.minute >= 10 and last_retention_day != now.day:
+                async with AsyncSessionLocal() as session:
+                    await purge_old_check_results(session, retention_days=7)
+                last_retention_day = now.day
+        except Exception:
+            pass
+
+        await asyncio.sleep(30)
