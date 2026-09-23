@@ -216,3 +216,9 @@ async def test_retention_purges_old_raw_logs(db_session: AsyncSession, test_user
     remaining = (await db_session.execute(select(CheckResult))).scalars().all()
     assert len(remaining) == 2
     assert all(c.created_at >= now - timedelta(days=7) for c in remaining)
+
+
+@pytest.mark.asyncio
+async def test_rollup_target_hour_none(db_session: AsyncSession) -> None:
+    count = await aggregate_hourly_uptime(db_session, target_hour=None)
+    assert count == 0

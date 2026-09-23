@@ -1,7 +1,10 @@
+import uuid
 from unittest.mock import AsyncMock, patch
+import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
-from services.alerter.state_machine import handle_alert_event
+from services.alerter.state_machine import handle_alert_event, notify_channels, send_telegram_alert
+from services.common.config import settings
 from services.common.models import AlertConfig, Monitor, User
 
 
@@ -51,30 +54,25 @@ async def test_alerter_state_machine_transitions(db_session: AsyncSession, test_
             "url": monitor.url,
         }
 
-        # 1st Fail -> PENDING_DOWN, no alert
         await handle_alert_event(event_fail)
         assert redis_hash["status"] == "PENDING_DOWN"
         assert redis_hash["consecutive_fails"] == "1"
         assert mock_tg.call_count == 0
 
-        # 2nd Fail -> PENDING_DOWN, no alert
         await handle_alert_event(event_fail)
         assert redis_hash["status"] == "PENDING_DOWN"
         assert redis_hash["consecutive_fails"] == "2"
         assert mock_tg.call_count == 0
 
-        # 3rd Fail -> Reaches threshold (3) -> DOWN, alert triggered!
         await handle_alert_event(event_fail)
         assert redis_hash["status"] == "DOWN"
         assert redis_hash["consecutive_fails"] == "3"
         assert mock_tg.call_count == 1
 
-        # 4th Fail -> Under cooldown -> No duplicate alert!
         await handle_alert_event(event_fail)
         assert redis_hash["status"] == "DOWN"
         assert mock_tg.call_count == 1
 
-        # Success event -> Recovery!
         event_success = {
             "monitor_id": str(monitor.id),
             "is_success": True,
@@ -83,5 +81,44 @@ async def test_alerter_state_machine_transitions(db_session: AsyncSession, test_
         await handle_alert_event(event_success)
         assert redis_hash["status"] == "UP"
         assert redis_hash["consecutive_fails"] == "0"
-        # Recovery alert sent (+1 to call_count -> 2)
         assert mock_tg.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_send_telegram_alert_scenarios():
+    with patch.object(settings, "TELEGRAM_BOT_TOKEN", ""):
+        assert await send_telegram_alert("123", "msg") is False
+
+    with patch.object(settings, "TELEGRAM_BOT_TOKEN", "valid_token"):
+        assert await send_telegram_alert("", "msg") is False
+
+        mock_resp_200 = httpx.Response(200, request=httpx.Request("POST", "https://api.telegram.org"))
+        with patch("httpx.AsyncClient.post", return_value=mock_resp_200):
+            assert await send_telegram_alert("123", "msg") is True
+
+        mock_resp_500 = httpx.Response(500, request=httpx.Request("POST", "https://api.telegram.org"))
+        with patch("httpx.AsyncClient.post", return_value=mock_resp_500):
+            assert await send_telegram_alert("123", "msg") is False
+
+        with patch("httpx.AsyncClient.post", side_effect=httpx.ConnectError("Network error")):
+            assert await send_telegram_alert("123", "msg") is False
+
+
+@pytest.mark.asyncio
+async def test_notify_channels_fallback(db_session: AsyncSession):
+    with patch("services.alerter.state_machine.AsyncSessionLocal", return_value=db_session), \
+         patch.object(settings, "TELEGRAM_DEFAULT_CHAT_ID", "default_999"), \
+         patch("services.alerter.state_machine.send_telegram_alert", new_callable=AsyncMock) as mock_send:
+        await notify_channels(uuid.uuid4(), "Fallback Mon", "Test alert")
+        mock_send.assert_called_once_with("default_999", "Test alert")
+
+
+@pytest.mark.asyncio
+async def test_handle_alert_event_edge_cases():
+    await handle_alert_event({})
+
+    mock_redis = AsyncMock()
+    mock_redis.set = AsyncMock(return_value=False)
+    with patch("services.alerter.state_machine.get_redis_client", return_value=mock_redis), \
+         patch("asyncio.sleep", new_callable=AsyncMock):
+        await handle_alert_event({"monitor_id": str(uuid.uuid4())})

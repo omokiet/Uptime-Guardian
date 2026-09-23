@@ -1,3 +1,4 @@
+import uuid
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,3 +56,52 @@ async def test_alert_configs_api_flow(
         headers=auth_headers,
     )
     assert len(list_after.json()) == 0
+
+
+@pytest.mark.asyncio
+async def test_alert_configs_not_found_errors(
+    async_client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+    test_user: User,
+):
+    non_existent_id = uuid.uuid4()
+    create_payload = {
+        "channel": "telegram",
+        "destination": "chat_123",
+        "is_enabled": True,
+    }
+
+    resp = await async_client.post(
+        f"/api/v1/monitors/{non_existent_id}/alerts",
+        json=create_payload,
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+
+    resp = await async_client.get(
+        f"/api/v1/monitors/{non_existent_id}/alerts",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+
+    resp = await async_client.delete(
+        f"/api/v1/monitors/{non_existent_id}/alerts/{uuid.uuid4()}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+
+    monitor = Monitor(
+        user_id=test_user.id,
+        name="Existing Monitor",
+        url="https://existing.example.com",
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    resp = await async_client.delete(
+        f"/api/v1/monitors/{monitor.id}/alerts/{uuid.uuid4()}",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
