@@ -52,6 +52,14 @@ ENV/
 HANDOFF.md
 CHECKLIST*.md
 
+# AI Agent Working Memory & Configs
+.agents/
+task_plan.md
+progress.md
+findings.md
+walkthrough.md
+implementation_plan.md
+
 # Node.js & Vite Dashboard
 node_modules/
 dist/
