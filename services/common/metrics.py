@@ -42,3 +42,8 @@ RABBITMQ_QUEUE_DEPTH = Gauge(
     "Current number of ready messages in queue",
     ["queue_name"],
 )
+
+CHECKER_PROCESSING_ERRORS_TOTAL = Counter(
+    "checker_processing_errors_total",
+    "Total unhandled worker errors when consuming check jobs",
+)
