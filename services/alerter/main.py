@@ -1,9 +1,12 @@
 import asyncio
 import json
+import logging
 from services.alerter.state_machine import handle_alert_event
 from services.common.config import settings
 from services.common.rabbitmq import close_rabbitmq, get_rabbitmq_connection
 from services.common.redis_client import close_redis
+
+logger = logging.getLogger(__name__)
 
 
 async def run_alerter_worker() -> None:
@@ -18,8 +21,8 @@ async def run_alerter_worker() -> None:
                 try:
                     payload = json.loads(message.body.decode("utf-8"))
                     await handle_alert_event(payload)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.error("Lỗi xử lý alert event từ RabbitMQ: %s", exc, exc_info=True)
 
 
 async def main() -> None:
