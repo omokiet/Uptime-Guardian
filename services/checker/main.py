@@ -1,9 +1,13 @@
 import asyncio
 import json
-from services.checker.checker import process_check_job
+import logging
+from services.checker.checker import close_httpx_client, process_check_job
 from services.common.config import settings
+from services.common.metrics import CHECKER_PROCESSING_ERRORS_TOTAL
 from services.common.rabbitmq import close_rabbitmq, get_rabbitmq_connection
 from services.common.redis_client import close_redis
+
+logger = logging.getLogger(__name__)
 
 
 async def run_checker_worker() -> None:
@@ -18,14 +22,16 @@ async def run_checker_worker() -> None:
                 try:
                     payload = json.loads(message.body.decode("utf-8"))
                     await process_check_job(payload)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    CHECKER_PROCESSING_ERRORS_TOTAL.inc()
+                    logger.error("Lỗi xử lý check job từ RabbitMQ: %s", exc, exc_info=True)
 
 
 async def main() -> None:
     try:
         await run_checker_worker()
     finally:
+        await close_httpx_client()
         await close_redis()
         await close_rabbitmq()
 

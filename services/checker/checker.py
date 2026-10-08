@@ -4,7 +4,7 @@ import ssl
 import time
 import uuid
 from typing import Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 import httpx
 from services.common.database import AsyncSessionLocal
 from services.common.metrics import (
@@ -16,6 +16,30 @@ from services.common.models import CheckResult
 from services.common.rabbitmq import publish_message
 from services.common.redis_client import get_redis_client
 from services.common.ssrf import SSRFValidationError, validate_target_url
+
+_httpx_client: Optional[httpx.AsyncClient] = None
+
+
+def get_httpx_client() -> httpx.AsyncClient:
+    global _httpx_client
+    if _httpx_client is None or _httpx_client.is_closed:
+        limits = httpx.Limits(
+            max_connections=200,
+            max_keepalive_connections=50,
+            keepalive_expiry=30.0,
+        )
+        _httpx_client = httpx.AsyncClient(
+            limits=limits,
+            verify=True,
+        )
+    return _httpx_client
+
+
+async def close_httpx_client() -> None:
+    global _httpx_client
+    if _httpx_client is not None and not _httpx_client.is_closed:
+        await _httpx_client.aclose()
+        _httpx_client = None
 
 
 async def check_ssl_days(hostname: str, port: int = 443, timeout: float = 5.0) -> Optional[int]:
@@ -65,13 +89,68 @@ async def execute_check(
         ssl_days = await check_ssl_days(parsed.hostname, port, timeout=min(5.0, float(timeout_seconds)))
 
     start_time = time.perf_counter()
+    current_url = url
+    current_method = method
+    visited_urls = {current_url}
+    max_redirects = 5
+    redirect_count = 0
+    client = get_httpx_client()
+
     try:
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=float(timeout_seconds),
-            verify=True,
-        ) as client:
-            response = await client.request(method=method, url=url)
+        while True:
+            elapsed = time.perf_counter() - start_time
+            remaining_timeout = float(timeout_seconds) - elapsed
+            if remaining_timeout <= 0:
+                return False, None, int(elapsed * 1000), f"Kết nối quá thời gian chờ ({timeout_seconds}s)", ssl_days
+
+            response = await client.request(
+                method=current_method,
+                url=current_url,
+                timeout=remaining_timeout,
+                follow_redirects=False,
+            )
+
+            if (
+                response.status_code in (301, 302, 303, 307, 308)
+                and "location" in response.headers
+                and response.status_code != expected_status_code
+            ):
+                redirect_count += 1
+                if redirect_count > max_redirects:
+                    elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                    return (
+                        False,
+                        response.status_code,
+                        elapsed_ms,
+                        f"Vượt quá số lần chuyển hướng tối đa ({max_redirects})",
+                        ssl_days,
+                    )
+
+                raw_location = response.headers["location"]
+                next_url = urljoin(current_url, raw_location)
+
+                if next_url in visited_urls:
+                    elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                    return (
+                        False,
+                        response.status_code,
+                        elapsed_ms,
+                        f"Phát hiện vòng lặp chuyển hướng (Redirect loop: {next_url})",
+                        ssl_days,
+                    )
+
+                try:
+                    validate_target_url(next_url)
+                except SSRFValidationError as exc:
+                    elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                    return False, response.status_code, elapsed_ms, str(exc), ssl_days
+
+                visited_urls.add(next_url)
+                current_url = next_url
+                if response.status_code in (301, 302, 303):
+                    current_method = "GET"
+                continue
+
             elapsed_ms = int((time.perf_counter() - start_time) * 1000)
             status_code = response.status_code
             is_success = status_code == expected_status_code

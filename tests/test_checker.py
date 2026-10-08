@@ -5,7 +5,14 @@ import httpx
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from services.checker.checker import check_ssl_days, execute_check, process_check_job
+from services.checker.checker import (
+    check_ssl_days,
+    close_httpx_client,
+    execute_check,
+    get_httpx_client,
+    process_check_job,
+)
+from services.checker.main import main as checker_main
 from services.common.models import CheckResult, Monitor, User
 
 
@@ -174,3 +181,184 @@ async def test_process_check_job_invalid_payload():
     assert await process_check_job({}) is False
     assert await process_check_job({"job_id": "1"}) is False
     assert await process_check_job({"job_id": "1", "monitor_id": "2"}) is False
+
+
+@pytest.mark.asyncio
+async def test_redirect_ssrf_blocked():
+    fake_addr_public = [(None, None, None, None, ("93.184.216.34", 80))]
+    fake_addr_private = [(None, None, None, None, ("192.168.1.1", 80))]
+
+    def mock_getaddrinfo(host, port):
+        if "internal" in host:
+            return fake_addr_private
+        return fake_addr_public
+
+    resp_302 = httpx.Response(
+        status_code=302,
+        headers={"location": "http://internal.company.lan/admin"},
+        request=httpx.Request("GET", "https://example.com"),
+    )
+
+    with patch("socket.getaddrinfo", side_effect=mock_getaddrinfo), \
+         patch("httpx.AsyncClient.request", return_value=resp_302):
+        is_succ, code, rtt, err, ssl = await execute_check(
+            job_id="job-redir-1",
+            monitor_id="mon-redir-1",
+            url="https://example.com",
+            expected_status_code=200,
+        )
+        assert is_succ is False
+        assert code == 302
+        assert "Anti-SSRF" in err
+
+
+@pytest.mark.asyncio
+async def test_redirect_loop_detected():
+    fake_addr = [(None, None, None, None, ("93.184.216.34", 80))]
+
+    async def mock_request(self, method, url, **kwargs):
+        if "loop-a" in str(url):
+            return httpx.Response(
+                status_code=302,
+                headers={"location": "https://example.com/loop-b"},
+                request=httpx.Request("GET", str(url)),
+            )
+        return httpx.Response(
+            status_code=302,
+            headers={"location": "https://example.com/loop-a"},
+            request=httpx.Request("GET", str(url)),
+        )
+
+    with patch("socket.getaddrinfo", return_value=fake_addr), \
+         patch("httpx.AsyncClient.request", new=mock_request):
+        is_succ, code, rtt, err, ssl = await execute_check(
+            job_id="job-loop-1",
+            monitor_id="mon-loop-1",
+            url="https://example.com/loop-a",
+            expected_status_code=200,
+        )
+        assert is_succ is False
+        assert code == 302
+        assert "Redirect loop" in err
+
+
+@pytest.mark.asyncio
+async def test_max_redirects_exceeded():
+    fake_addr = [(None, None, None, None, ("93.184.216.34", 80))]
+    step = 0
+
+    async def mock_request(self, method, url, **kwargs):
+        nonlocal step
+        step += 1
+        return httpx.Response(
+            status_code=302,
+            headers={"location": f"https://example.com/step-{step}"},
+            request=httpx.Request("GET", str(url)),
+        )
+
+    with patch("socket.getaddrinfo", return_value=fake_addr), \
+         patch("httpx.AsyncClient.request", new=mock_request):
+        is_succ, code, rtt, err, ssl = await execute_check(
+            job_id="job-max-1",
+            monitor_id="mon-max-1",
+            url="https://example.com/step-0",
+            expected_status_code=200,
+        )
+        assert is_succ is False
+        assert code == 302
+        assert "Vượt quá số lần chuyển hướng tối đa" in err
+
+
+@pytest.mark.asyncio
+async def test_valid_redirect_success():
+    fake_addr = [(None, None, None, None, ("93.184.216.34", 80))]
+
+    async def mock_request(self, method, url, **kwargs):
+        if "/old" in str(url):
+            return httpx.Response(
+                status_code=301,
+                headers={"location": "/new"},
+                request=httpx.Request("GET", str(url)),
+            )
+        return httpx.Response(
+            status_code=200,
+            request=httpx.Request("GET", str(url)),
+        )
+
+    with patch("socket.getaddrinfo", return_value=fake_addr), \
+         patch("httpx.AsyncClient.request", new=mock_request):
+        is_succ, code, rtt, err, ssl = await execute_check(
+            job_id="job-succ-1",
+            monitor_id="mon-succ-1",
+            url="https://example.com/old",
+            expected_status_code=200,
+        )
+        assert is_succ is True
+        assert code == 200
+        assert err is None
+
+
+@pytest.mark.asyncio
+async def test_httpx_client_lifecycle():
+    client = get_httpx_client()
+    assert client is not None
+    assert not client.is_closed
+
+    await close_httpx_client()
+    new_client = get_httpx_client()
+    assert new_client is not None
+    await close_httpx_client()
+
+
+@pytest.mark.asyncio
+async def test_checker_worker_and_main():
+    class DummyMessage:
+        def __init__(self, body: bytes):
+            self.body = body
+
+        def process(self, requeue: bool = False):
+            class _Ctx:
+                async def __aenter__(s):
+                    return None
+
+                async def __aexit__(s, *args):
+                    return None
+
+            return _Ctx()
+
+    class DummyQueue:
+        def iterator(self):
+            class _Iter:
+                async def __aenter__(s):
+                    return s
+
+                async def __aexit__(s, *args):
+                    return None
+
+                def __aiter__(s):
+                    s._items = [
+                        DummyMessage(b'{"job_id": "test"}'),
+                        DummyMessage(b"invalid-json"),
+                    ]
+                    return s
+
+                async def __anext__(s):
+                    if s._items:
+                        return s._items.pop(0)
+                    raise StopAsyncIteration
+
+            return _Iter()
+
+    mock_channel = AsyncMock()
+    mock_channel.declare_queue.return_value = DummyQueue()
+    mock_conn = AsyncMock()
+    mock_conn.channel.return_value = mock_channel
+
+    with patch("services.checker.main.get_rabbitmq_connection", return_value=mock_conn), \
+         patch("services.checker.main.process_check_job", new_callable=AsyncMock) as mock_process, \
+         patch("services.checker.main.close_httpx_client", new_callable=AsyncMock), \
+         patch("services.checker.main.close_redis", new_callable=AsyncMock), \
+         patch("services.checker.main.close_rabbitmq", new_callable=AsyncMock):
+
+        await checker_main()
+        assert mock_process.called
