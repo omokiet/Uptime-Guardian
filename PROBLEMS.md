@@ -82,19 +82,17 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 9. Đồng bộ phân tán: Thiếu Distributed Lock cho Telemetry Maintenance Loop
-- **Vị trí:** `services/scheduler/scheduler.py` (dòng 118-135)
-- **Vấn đề:** Vòng lặp `run_telemetry_maintenance_loop()` chạy Rollup và Purge dựa vào thời gian đồng hồ cục bộ (`now.minute >= 5` và `now.hour == 3`).
-- **Rủi ro:** Khi scale chạy 2-3 replicas của Scheduler để đảm bảo High Availability (HA), tất cả các replica sẽ đồng thời thực thi `aggregate_hourly_uptime()` và `purge_old_check_results()` cùng một lúc, gây lock bảng DB và trùng lặp tính toán.
-- **Giải pháp đề xuất:** Sử dụng Redis Distributed Lock (`SET lock:maintenance:rollup 1 EX 300 NX`) để chỉ 1 replica duy nhất được thực hiện maintenance job trong mỗi chu kỳ.
+## 9. [ĐÃ XỬ LÝ] Đồng bộ phân tán: Thiếu Distributed Lock cho Telemetry Maintenance Loop
+- **Vị trí:** `services/scheduler/scheduler.py`
+- **Trạng thái:** Đã xử lý (Atomic Redis lock `SET lock:maintenance:rollup:YYYYMMDDHH 1 NX EX 3600` và `SET lock:maintenance:retention:YYYYMMDD 1 NX EX 86400`).
 
 ---
 
 ## 10. API Gateway: Thiếu Phân trang (Pagination) & Rate Limiting
 - **Vị trí:** `services/api_gateway/routers/monitors.py` (`list_monitors`) & `routers/auth.py`
-- **Vấn đề:** Endpoint `GET /monitors` không có tham số `limit` và `offset`, trả về toàn bộ monitor của user. Endpoints `POST /login`, `POST /register` không có rate limit.
-- **Rủi ro:** User sở hữu hàng ngàn monitor sẽ khiến API Gateway bị nghẽn RAM khi serialize dữ liệu (Memory Spike / OOM). Attacker có thể brute-force mật khẩu mà không bị chặn.
-- **Giải pháp đề xuất:** Áp dụng Pagination bắt buộc (`limit` tối đa 100) và triển khai Redis Token Bucket rate limiting middleware cho tầng Auth.
+- **Trạng thái:** 
+  - Phân trang: Đã xử lý (`limit` mặc định 50, tối đa 100, `offset` mặc định 0).
+  - Rate limiting tầng Auth: Cần triển khai tiếp theo.
 
 ---
 
