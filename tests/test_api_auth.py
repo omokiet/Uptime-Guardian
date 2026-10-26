@@ -105,6 +105,49 @@ async def test_auth_rate_limiter_fail_open_on_redis_error(async_client: AsyncCli
         assert resp.status_code == 401
 
 
+@pytest.mark.asyncio
+async def test_auth_login_rate_limiting_boundary(async_client: AsyncClient):
+    app.dependency_overrides.pop(rate_limit_login, None)
+    mock_redis = MagicMock()
+    mock_pipe = MagicMock()
+    mock_pipe.execute = AsyncMock(return_value=[10, 30])
+    mock_redis.pipeline.return_value = mock_pipe
+    mock_redis.expire = AsyncMock()
+
+    with patch("services.api_gateway.rate_limiter.get_redis_client", return_value=mock_redis):
+        resp_at_limit = await async_client.post(
+            "/api/v1/auth/login",
+            json={"email": "boundary@example.com", "password": "wrongpassword"},
+        )
+        assert resp_at_limit.status_code == 401
+
+    mock_pipe.execute = AsyncMock(return_value=[11, 29])
+    with patch("services.api_gateway.rate_limiter.get_redis_client", return_value=mock_redis):
+        resp_exceeded = await async_client.post(
+            "/api/v1/auth/login",
+            json={"email": "boundary@example.com", "password": "wrongpassword"},
+        )
+        assert resp_exceeded.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_auth_rate_limiter_restores_missing_ttl(async_client: AsyncClient):
+    app.dependency_overrides.pop(rate_limit_login, None)
+    mock_redis = MagicMock()
+    mock_pipe = MagicMock()
+    mock_pipe.execute = AsyncMock(return_value=[3, -1])
+    mock_redis.pipeline.return_value = mock_pipe
+    mock_redis.expire = AsyncMock()
+
+    with patch("services.api_gateway.rate_limiter.get_redis_client", return_value=mock_redis):
+        await async_client.post(
+            "/api/v1/auth/login",
+            json={"email": "ttl_restore@example.com", "password": "wrongpassword"},
+            headers={"X-Real-IP": "198.51.100.99"},
+        )
+        mock_redis.expire.assert_called_once_with("ratelimit:auth:login:198.51.100.99", 60)
+
+
 def test_auth_get_client_ip_headers():
     req_forwarded = MagicMock()
     req_forwarded.headers = {"X-Forwarded-For": "103.21.244.2, 192.168.1.1"}

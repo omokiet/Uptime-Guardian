@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services.common.models import Monitor, User
 from services.scheduler.scheduler import (
     process_due_monitors,
+    reconcile_monitors_with_redis,
+    run_reconciliation_loop,
     run_scheduler_loop,
     run_telemetry_maintenance_loop,
     sync_active_monitors_to_redis,
@@ -161,3 +163,86 @@ async def test_telemetry_maintenance_loop_lock_skipped(db_session: AsyncSession)
 
         assert not mock_rollup.called
         assert not mock_purge.called
+
+
+@pytest.mark.asyncio
+async def test_reconcile_monitors_adds_missing_and_removes_orphans(db_session: AsyncSession, test_user: User):
+    m_active1 = Monitor(user_id=test_user.id, name="Active 1", url="https://m1.com", is_active=True)
+    m_active2 = Monitor(user_id=test_user.id, name="Active 2", url="https://m2.com", is_active=True)
+    m_inactive = Monitor(user_id=test_user.id, name="Inactive", url="https://m3.com", is_active=False)
+    db_session.add_all([m_active1, m_active2, m_inactive])
+    await db_session.commit()
+
+    orphan_id = "00000000-0000-0000-0000-000000000099"
+    redis_members = [str(m_active2.id), orphan_id]
+
+    mock_redis = AsyncMock()
+    mock_redis.zrange = AsyncMock(return_value=redis_members)
+    mock_pipe = AsyncMock()
+    mock_pipe.zadd = MagicMock()
+    mock_pipe.zrem = MagicMock()
+    mock_redis.pipeline = MagicMock(return_value=mock_pipe)
+
+    with patch("services.scheduler.scheduler.get_redis_client", return_value=mock_redis), \
+         patch("services.scheduler.scheduler.AsyncSessionLocal", return_value=db_session):
+        added, removed = await reconcile_monitors_with_redis()
+        assert added == 1
+        assert removed == 1
+        mock_pipe.zadd.assert_called_once()
+        args, kwargs = mock_pipe.zadd.call_args
+        assert args[0] == "scheduler:monitors"
+        assert str(m_active1.id) in args[1]
+        assert kwargs.get("nx") is True
+        mock_pipe.zrem.assert_called_once_with("scheduler:monitors", orphan_id)
+        assert mock_pipe.execute.called
+
+
+@pytest.mark.asyncio
+async def test_reconcile_monitors_empty_diff(db_session: AsyncSession, test_user: User):
+    m_active = Monitor(user_id=test_user.id, name="In Sync", url="https://sync.com", is_active=True)
+    db_session.add(m_active)
+    await db_session.commit()
+
+    mock_redis = AsyncMock()
+    mock_redis.zrange = AsyncMock(return_value=[str(m_active.id)])
+    mock_pipe = AsyncMock()
+    mock_pipe.zadd = MagicMock()
+    mock_pipe.zrem = MagicMock()
+    mock_redis.pipeline = MagicMock(return_value=mock_pipe)
+
+    with patch("services.scheduler.scheduler.get_redis_client", return_value=mock_redis), \
+         patch("services.scheduler.scheduler.AsyncSessionLocal", return_value=db_session):
+        added, removed = await reconcile_monitors_with_redis()
+        assert added == 0
+        assert removed == 0
+        assert not mock_pipe.zadd.called
+        assert not mock_pipe.zrem.called
+
+
+@pytest.mark.asyncio
+async def test_run_reconciliation_loop_with_lock():
+    mock_redis = AsyncMock()
+    mock_redis.set = AsyncMock(side_effect=[True, False])
+
+    with patch("services.scheduler.scheduler.get_redis_client", return_value=mock_redis), \
+         patch("services.scheduler.scheduler.reconcile_monitors_with_redis", new_callable=AsyncMock) as mock_rec, \
+         patch("services.scheduler.scheduler.asyncio.sleep", side_effect=[None, asyncio.CancelledError]):
+        try:
+            await run_reconciliation_loop(interval_seconds=1)
+        except asyncio.CancelledError:
+            pass
+        assert mock_rec.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_run_reconciliation_loop_fault_injection_recovery():
+    mock_redis = AsyncMock()
+    mock_redis.set = AsyncMock(return_value=True)
+
+    with patch("services.scheduler.scheduler.get_redis_client", return_value=mock_redis), \
+         patch("services.scheduler.scheduler.reconcile_monitors_with_redis", side_effect=RuntimeError("DB drop")), \
+         patch("services.scheduler.scheduler.asyncio.sleep", side_effect=asyncio.CancelledError):
+        try:
+            await run_reconciliation_loop(interval_seconds=1)
+        except asyncio.CancelledError:
+            pass

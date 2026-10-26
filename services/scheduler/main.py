@@ -2,6 +2,7 @@ import asyncio
 from services.common.rabbitmq import close_rabbitmq
 from services.common.redis_client import close_redis
 from services.scheduler.scheduler import (
+    run_reconciliation_loop,
     run_scheduler_loop,
     run_telemetry_maintenance_loop,
 )
@@ -12,6 +13,7 @@ async def main() -> None:
         await asyncio.gather(
             run_scheduler_loop(),
             run_telemetry_maintenance_loop(),
+            run_reconciliation_loop(),
         )
     finally:
         await close_redis()

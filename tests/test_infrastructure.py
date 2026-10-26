@@ -159,6 +159,7 @@ async def test_checker_worker_execution():
 async def test_scheduler_main_execution():
     with patch("services.scheduler.main.run_scheduler_loop", new_callable=AsyncMock), \
          patch("services.scheduler.main.run_telemetry_maintenance_loop", new_callable=AsyncMock), \
+         patch("services.scheduler.main.run_reconciliation_loop", new_callable=AsyncMock), \
          patch("services.scheduler.main.close_redis", new_callable=AsyncMock) as mock_redis, \
          patch("services.scheduler.main.close_rabbitmq", new_callable=AsyncMock) as mock_rmq:
         await scheduler_main()

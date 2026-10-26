@@ -141,3 +141,57 @@ async def run_telemetry_maintenance_loop() -> None:
             SCHEDULER_MAINTENANCE_ERRORS_TOTAL.labels(task="maintenance_loop").inc()
 
         await asyncio.sleep(30)
+
+
+async def reconcile_monitors_with_redis() -> tuple[int, int]:
+    redis_client = get_redis_client()
+    now_ms = int(time.time() * 1000)
+
+    async with AsyncSessionLocal() as session:
+        stmt = select(Monitor.id).where(Monitor.is_active.is_(True))
+        result = await session.execute(stmt)
+        active_ids = {str(m_id) for m_id in result.scalars().all()}
+
+    redis_members = await redis_client.zrange("scheduler:monitors", 0, -1)
+    redis_ids = set(redis_members)
+
+    missing_in_redis = active_ids - redis_ids
+    orphans_in_redis = redis_ids - active_ids
+
+    if not missing_in_redis and not orphans_in_redis:
+        return 0, 0
+
+    pipe = redis_client.pipeline()
+
+    if missing_in_redis:
+        zadd_mapping = {m_id: now_ms for m_id in missing_in_redis}
+        pipe.zadd("scheduler:monitors", zadd_mapping, nx=True)
+
+    if orphans_in_redis:
+        pipe.zrem("scheduler:monitors", *orphans_in_redis)
+
+    await pipe.execute()
+    return len(missing_in_redis), len(orphans_in_redis)
+
+
+async def run_reconciliation_loop(interval_seconds: int = 300) -> None:
+    redis_client = get_redis_client()
+    lock_key = "lock:scheduler:reconciliation"
+
+    while True:
+        try:
+            lock_acquired = await redis_client.set(
+                lock_key,
+                "1",
+                nx=True,
+                ex=max(interval_seconds - 10, 10),
+            )
+            if lock_acquired:
+                added, removed = await reconcile_monitors_with_redis()
+                if added > 0 or removed > 0:
+                    logger.info("Reconciliation completed: +%d added, -%d removed", added, removed)
+        except Exception as exc:
+            logger.error("Reconciliation loop failed: %s", exc, exc_info=True)
+            SCHEDULER_MAINTENANCE_ERRORS_TOTAL.labels(task="reconciliation").inc()
+
+        await asyncio.sleep(interval_seconds)

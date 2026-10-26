@@ -97,8 +97,11 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 11. Đồng bộ trạng thái: Thiếu cơ chế Reconciliation Loop cho Scheduler
-- **Vị trí:** `services/scheduler/scheduler.py` (dòng 108)
-- **Vấn đề:** Hàm `sync_active_monitors_to_redis()` chỉ được gọi duy nhất 1 lần khi tiến trình khởi động.
-- **Rủi ro:** Nếu Redis bị khởi động lại (restart/failover) hoặc dữ liệu trong Redis ZSET bị xóa/evict trong khi scheduler đang chạy, danh sách monitor cần chạy sẽ bị mất hoàn toàn và hệ thống ngừng giám sát mà không tự hồi phục.
-- **Giải pháp đề xuất:** Chạy một chu kỳ đối soát (Reconciliation loop) định kỳ mỗi 5–10 phút để quét lại các monitor `is_active=True` từ DB và bổ sung lại vào Redis ZSET nếu bị thiếu.
+## 11. [ĐÃ XỬ LÝ] Đồng bộ trạng thái: Thiếu cơ chế Reconciliation Loop cho Scheduler
+- **Vị trí:** `services/scheduler/scheduler.py` & `services/scheduler/main.py`
+- **Trạng thái:** Đã xử lý (Branch `fix/scheduler-reconciliation-loop`).
+- **Giải pháp đã triển khai:**
+  - Xây dựng hàm `reconcile_monitors_with_redis()`: Truy vấn lightweight chỉ lấy tập ID monitor active (`is_active=True`), đối chiếu tập hợp với member hiện có trong `scheduler:monitors`.
+  - Tự động bổ sung monitor bị thiếu qua `pipe.zadd(..., nx=True)` (không ghi đè score đang lease) và loại bỏ orphan data qua `pipe.zrem()`.
+  - Triển khai `run_reconciliation_loop(interval_seconds=300)` chạy nền định kỳ mỗi 5 phút với Redis distributed lock `SET lock:scheduler:reconciliation 1 NX EX 290` ngăn chặn xung đột multi-replica.
+  - Tích hợp vào `asyncio.gather` trong `services/scheduler/main.py`.
