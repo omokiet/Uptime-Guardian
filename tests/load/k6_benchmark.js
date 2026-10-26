@@ -51,26 +51,21 @@ export function setup() {
     password: 'Password123!@#',
   };
 
-  const registerRes = http.post(
+  http.post(
     `${BASE_URL}/api/v1/auth/register`,
     JSON.stringify(testUser),
     { headers: { 'Content-Type': 'application/json' } }
   );
 
-  let token = null;
-  if (registerRes.status === 201) {
-    token = registerRes.json('access_token');
-  } else {
-    const loginRes = http.post(
-      `${BASE_URL}/api/v1/auth/login`,
-      JSON.stringify(testUser),
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-    token = loginRes.json('access_token');
-  }
+  const loginRes = http.post(
+    `${BASE_URL}/api/v1/auth/login`,
+    JSON.stringify(testUser),
+    { headers: { 'Content-Type': 'application/json' } }
+  );
 
+  const token = loginRes.json('access_token');
   if (!token) {
-    throw new Error('Failed to acquire authentication token in setup phase');
+    throw new Error(`Failed to acquire token: ${loginRes.status} ${loginRes.body}`);
   }
 
   const authHeaders = {
