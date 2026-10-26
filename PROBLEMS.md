@@ -88,11 +88,12 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 10. API Gateway: Thiếu Phân trang (Pagination) & Rate Limiting
+## 10. [ĐÃ XỬ LÝ] API Gateway: Thiếu Phân trang (Pagination) & Rate Limiting
 - **Vị trí:** `services/api_gateway/routers/monitors.py` (`list_monitors`) & `routers/auth.py`
-- **Trạng thái:** 
+- **Trạng thái:** Đã xử lý (Branch `fix/auth-rate-limiting`).
+- **Giải pháp đã triển khai:**
   - Phân trang: Đã xử lý (`limit` mặc định 50, tối đa 100, `offset` mặc định 0).
-  - Rate limiting tầng Auth: Cần triển khai tiếp theo.
+  - Rate limiting tầng Auth: Triển khai `AuthRateLimiter` dependency bảo vệ `/login` (10 req/phút) và `/register` (5 req/5 phút). Sử dụng Redis atomic pipeline `INCR` + `EXPIRE NX`. Hỗ trợ trích xuất IP client từ `X-Forwarded-For` / `X-Real-IP`, cơ chế fail-open khi Redis gặp sự cố và trả về `HTTP 429 Too Many Requests` kèm header `Retry-After`.
 
 ---
 

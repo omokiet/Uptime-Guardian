@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from services.api_gateway.main import app
+from services.api_gateway.rate_limiter import rate_limit_login, rate_limit_register
 from services.common.database import Base, get_db
 from services.common.models import User
 from services.common.security import create_access_token, hash_password
@@ -44,7 +45,12 @@ async def async_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
 
+    async def noop_rate_limit() -> None:
+        return None
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[rate_limit_login] = noop_rate_limit
+    app.dependency_overrides[rate_limit_register] = noop_rate_limit
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client

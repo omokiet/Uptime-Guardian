@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from services.api_gateway.dependencies import get_current_user
+from services.api_gateway.rate_limiter import rate_limit_login, rate_limit_register
 from services.common.database import get_db
 from services.common.models import User
 from services.common.schemas import Token, UserCreate, UserResponse
@@ -11,7 +12,12 @@ from services.common.security import create_access_token, hash_password, verify_
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit_register)],
+)
 async def register(user_in: UserCreate, db: Annotated[AsyncSession, Depends(get_db)]):
     stmt = select(User).where(User.email == user_in.email)
     existing = await db.execute(stmt)
@@ -31,7 +37,11 @@ async def register(user_in: UserCreate, db: Annotated[AsyncSession, Depends(get_
     return user
 
 
-@router.post("/login", response_model=Token)
+@router.post(
+    "/login",
+    response_model=Token,
+    dependencies=[Depends(rate_limit_login)],
+)
 async def login(user_in: UserCreate, db: Annotated[AsyncSession, Depends(get_db)]):
     stmt = select(User).where(User.email == user_in.email)
     result = await db.execute(stmt)

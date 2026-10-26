@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     COOLDOWN_MINUTES: int = 15
     CONSECUTIVE_THRESHOLD: int = 3
 
+    RATE_LIMIT_ENABLED: bool = True
+    AUTH_LOGIN_RATE_LIMIT: int = 10
+    AUTH_LOGIN_WINDOW_SECONDS: int = 60
+    AUTH_REGISTER_RATE_LIMIT: int = 5
+    AUTH_REGISTER_WINDOW_SECONDS: int = 300
+
     model_config = {
         "env_file": ".env",
         "extra": "ignore"
