@@ -54,11 +54,13 @@ async def list_monitors(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     is_active: Optional[bool] = None,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
 ):
     stmt = select(Monitor).where(Monitor.user_id == current_user.id)
     if is_active is not None:
         stmt = stmt.where(Monitor.is_active == is_active)
-    stmt = stmt.order_by(desc(Monitor.created_at))
+    stmt = stmt.order_by(desc(Monitor.created_at)).limit(limit).offset(offset)
     result = await db.execute(stmt)
     return result.scalars().all()
 

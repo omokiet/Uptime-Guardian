@@ -189,3 +189,27 @@ async def test_update_monitor_url_validation(async_client: AsyncClient, auth_hea
         )
         assert update_resp.status_code == 200
         assert update_resp.json()["url"] == "https://anotherexample.com"
+
+
+@pytest.mark.asyncio
+async def test_list_monitors_pagination(async_client: AsyncClient, auth_headers: dict):
+    fake_addr_info = [(None, None, None, None, ("93.184.216.34", 80))]
+    mock_redis = AsyncMock()
+
+    with patch("socket.getaddrinfo", return_value=fake_addr_info), \
+         patch("services.api_gateway.routers.monitors.get_redis_client", return_value=mock_redis):
+
+        for i in range(3):
+            await async_client.post(
+                "/api/v1/monitors",
+                json={"name": f"Monitor {i}", "url": f"https://example{i}.com"},
+                headers=auth_headers,
+            )
+
+        resp_limit_2 = await async_client.get("/api/v1/monitors?limit=2&offset=0", headers=auth_headers)
+        assert resp_limit_2.status_code == 200
+        assert len(resp_limit_2.json()) == 2
+
+        resp_offset_2 = await async_client.get("/api/v1/monitors?limit=2&offset=2", headers=auth_headers)
+        assert resp_offset_2.status_code == 200
+        assert len(resp_offset_2.json()) == 1

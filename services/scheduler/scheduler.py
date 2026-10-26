@@ -1,16 +1,22 @@
 import asyncio
+import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List
 from sqlalchemy import select
 from services.common.config import settings
 from services.common.database import AsyncSessionLocal
-from services.common.metrics import SCHEDULER_DISPATCHED_JOBS_TOTAL
+from services.common.metrics import (
+    SCHEDULER_DISPATCHED_JOBS_TOTAL,
+    SCHEDULER_MAINTENANCE_ERRORS_TOTAL,
+)
 from services.common.models import Monitor
 from services.common.rabbitmq import publish_message
 from services.common.redis_client import get_redis_client
 from services.common.rollup import aggregate_hourly_uptime, purge_old_check_results
+
+logger = logging.getLogger(__name__)
 
 # Atomic Lua script: fetch items <= now_ms and lease them ahead
 # to prevent race conditions across multiple scheduler replicas
@@ -39,9 +45,7 @@ async def sync_active_monitors_to_redis() -> None:
 
         pipe = redis_client.pipeline()
         for monitor in monitors:
-            score = await redis_client.zscore("scheduler:monitors", str(monitor.id))
-            if score is None:
-                pipe.zadd("scheduler:monitors", {str(monitor.id): now_ms})
+            pipe.zadd("scheduler:monitors", {str(monitor.id): now_ms}, nx=True)
         await pipe.execute()
 
 
@@ -116,22 +120,24 @@ async def run_scheduler_loop() -> None:
 
 
 async def run_telemetry_maintenance_loop() -> None:
-    last_rollup_hour: Optional[int] = None
-    last_retention_day: Optional[int] = None
+    redis_client = get_redis_client()
 
     while True:
         try:
             now = datetime.now(timezone.utc)
-            if now.minute >= 5 and last_rollup_hour != now.hour:
-                async with AsyncSessionLocal() as session:
-                    await aggregate_hourly_uptime(session)
-                last_rollup_hour = now.hour
+            if now.minute >= 5:
+                rollup_lock_key = f"lock:maintenance:rollup:{now.strftime('%Y%m%d%H')}"
+                if await redis_client.set(rollup_lock_key, "1", nx=True, ex=3600):
+                    async with AsyncSessionLocal() as session:
+                        await aggregate_hourly_uptime(session)
 
-            if now.hour == 3 and now.minute >= 10 and last_retention_day != now.day:
-                async with AsyncSessionLocal() as session:
-                    await purge_old_check_results(session, retention_days=7)
-                last_retention_day = now.day
-        except Exception:
-            pass
+            if now.hour == 3 and now.minute >= 10:
+                retention_lock_key = f"lock:maintenance:retention:{now.strftime('%Y%m%d')}"
+                if await redis_client.set(retention_lock_key, "1", nx=True, ex=86400):
+                    async with AsyncSessionLocal() as session:
+                        await purge_old_check_results(session, retention_days=7)
+        except Exception as exc:
+            logger.error("Telemetry maintenance loop failed: %s", exc, exc_info=True)
+            SCHEDULER_MAINTENANCE_ERRORS_TOTAL.labels(task="maintenance_loop").inc()
 
         await asyncio.sleep(30)

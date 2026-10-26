@@ -10,7 +10,7 @@ from services.common.database import AsyncSessionLocal
 from services.common.metrics import (
     CHECKER_CHECKS_TOTAL,
     CHECKER_CHECK_DURATION_SECONDS,
-    CHECKER_SSL_DAYS_REMAINING,
+    CHECKER_SSL_EXPIRING_TOTAL,
 )
 from services.common.models import CheckResult
 from services.common.rabbitmq import publish_message
@@ -207,7 +207,10 @@ async def process_check_job(payload: dict) -> bool:
     if latency_ms is not None:
         CHECKER_CHECK_DURATION_SECONDS.labels(method=method).observe(latency_ms / 1000.0)
     if ssl_days is not None:
-        CHECKER_SSL_DAYS_REMAINING.labels(monitor_id=monitor_id_str).set(ssl_days)
+        if ssl_days <= 7:
+            CHECKER_SSL_EXPIRING_TOTAL.labels(urgency="critical").inc()
+        elif ssl_days <= 30:
+            CHECKER_SSL_EXPIRING_TOTAL.labels(urgency="warning").inc()
 
     m_uuid = uuid.UUID(monitor_id_str)
     j_uuid = uuid.UUID(job_id_str)

@@ -39,6 +39,14 @@ async def aggregate_hourly_uptime(
     if not rows:
         return 0
 
+    monitor_ids = [row.monitor_id for row in rows]
+    existing_stmt = select(HourlyUptimeSummary).where(
+        HourlyUptimeSummary.hour_timestamp == target_hour,
+        HourlyUptimeSummary.monitor_id.in_(monitor_ids),
+    )
+    existing_result = await session.execute(existing_stmt)
+    existing_map = {s.monitor_id: s for s in existing_result.scalars().all()}
+
     processed_count = 0
     for row in rows:
         monitor_id = row.monitor_id
@@ -54,13 +62,7 @@ async def aggregate_hourly_uptime(
         else:
             uptime_pct = Decimal("0.00")
 
-        existing_stmt = select(HourlyUptimeSummary).where(
-            HourlyUptimeSummary.monitor_id == monitor_id,
-            HourlyUptimeSummary.hour_timestamp == target_hour,
-        )
-        existing_result = await session.execute(existing_stmt)
-        summary = existing_result.scalar_one_or_none()
-
+        summary = existing_map.get(monitor_id)
         if summary:
             summary.total_checks = total_checks
             summary.success_checks = success_checks

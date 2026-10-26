@@ -85,55 +85,38 @@ async def handle_alert_event(event: dict) -> None:
                 threshold = mon.consecutive_threshold
                 monitor_name = mon.name
 
-        if is_success:
-            if current_status == "DOWN":
-                msg = (
-                    f"✅ *[RECOVERY] Dịch vụ đã hoạt động trở lại*\n"
-                    f"• *Tên:* {monitor_name}\n"
-                    f"• *URL:* {url}\n"
-                    f"• *Thời gian:* `{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}`"
-                )
-                await notify_channels(m_uuid, monitor_name, msg)
-
-            current_status = "UP"
-            consecutive_fails = 0
-            cooldown_until = 0
-
-            await redis_client.hset(
-                state_key,
-                mapping={
-                    "status": current_status,
-                    "consecutive_fails": str(consecutive_fails),
-                    "cooldown_until": str(cooldown_until),
-                    "updated_at": str(now_ms),
-                },
-            )
-
-            async with AsyncSessionLocal() as session:
-                m_res = await session.execute(select(Monitor).where(Monitor.id == m_uuid))
-                mon = m_res.scalar_one_or_none()
-                if mon:
-                    mon.current_status = current_status
-                    await session.commit()
-        else:
-            consecutive_fails += 1
-            if consecutive_fails < threshold:
-                current_status = "PENDING_DOWN"
-            else:
-                current_status = "DOWN"
-                if now_ms >= cooldown_until:
-                    cooldown_ms = settings.COOLDOWN_MINUTES * 60 * 1000
-                    cooldown_until = now_ms + cooldown_ms
+            if is_success:
+                if current_status == "DOWN":
                     msg = (
-                        f"🚨 *[DOWN ALERT] Dịch vụ ngừng hoạt động*\n"
+                        f"✅ *[RECOVERY] Dịch vụ đã hoạt động trở lại*\n"
                         f"• *Tên:* {monitor_name}\n"
                         f"• *URL:* {url}\n"
-                        f"• *Lỗi:* {error_msg}\n"
-                        f"• *Số lần fail liên tiếp:* {consecutive_fails}\n"
                         f"• *Thời gian:* `{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}`"
                     )
                     await notify_channels(m_uuid, monitor_name, msg)
 
+                current_status = "UP"
+                consecutive_fails = 0
+                cooldown_until = 0
+            else:
+                consecutive_fails += 1
+                if consecutive_fails < threshold:
+                    current_status = "PENDING_DOWN"
+                else:
+                    current_status = "DOWN"
+                    if now_ms >= cooldown_until:
+                        cooldown_ms = settings.COOLDOWN_MINUTES * 60 * 1000
+                        cooldown_until = now_ms + cooldown_ms
+                        msg = (
+                            f"🚨 *[DOWN ALERT] Dịch vụ ngừng hoạt động*\n"
+                            f"• *Tên:* {monitor_name}\n"
+                            f"• *URL:* {url}\n"
+                            f"• *Lỗi:* {error_msg}\n"
+                            f"• *Số lần fail liên tiếp:* {consecutive_fails}\n"
+                            f"• *Thời gian:* `{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}`"
+                        )
+                        await notify_channels(m_uuid, monitor_name, msg)
+
             await redis_client.hset(
                 state_key,
                 mapping={
@@ -144,12 +127,9 @@ async def handle_alert_event(event: dict) -> None:
                 },
             )
 
-            async with AsyncSessionLocal() as session:
-                m_res = await session.execute(select(Monitor).where(Monitor.id == m_uuid))
-                mon = m_res.scalar_one_or_none()
-                if mon:
-                    mon.current_status = current_status
-                    await session.commit()
+            if mon:
+                mon.current_status = current_status
+                await session.commit()
 
     finally:
         await redis_client.delete(lock_key)

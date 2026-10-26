@@ -26,10 +26,16 @@ CHECKER_CHECK_DURATION_SECONDS = Histogram(
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
 )
 
-CHECKER_SSL_DAYS_REMAINING = Gauge(
-    "checker_ssl_days_remaining",
-    "Remaining days before SSL certificate expiration",
-    ["monitor_id"],
+CHECKER_SSL_EXPIRING_TOTAL = Counter(
+    "checker_ssl_expiring_total",
+    "Total SSL certificates nearing expiration",
+    ["urgency"],
+)
+
+SCHEDULER_MAINTENANCE_ERRORS_TOTAL = Counter(
+    "scheduler_maintenance_errors_total",
+    "Total failures in scheduler telemetry rollup and retention jobs",
+    ["task"],
 )
 
 SCHEDULER_DISPATCHED_JOBS_TOTAL = Counter(

@@ -91,7 +91,6 @@ async def test_sync_active_monitors_to_redis(db_session: AsyncSession, test_user
     await db_session.commit()
 
     mock_redis = AsyncMock()
-    mock_redis.zscore = AsyncMock(return_value=None)
     mock_pipe = AsyncMock()
     mock_pipe.zadd = MagicMock()
     mock_redis.pipeline = MagicMock(return_value=mock_pipe)
@@ -120,8 +119,11 @@ async def test_telemetry_maintenance_loop_triggers(db_session: AsyncSession):
     fake_time = datetime(2026, 9, 23, 3, 15, tzinfo=timezone.utc)
     mock_dt = MagicMock()
     mock_dt.now.return_value = fake_time
+    mock_redis = AsyncMock()
+    mock_redis.set = AsyncMock(return_value=True)
 
     with patch("services.scheduler.scheduler.datetime", mock_dt), \
+         patch("services.scheduler.scheduler.get_redis_client", return_value=mock_redis), \
          patch("services.scheduler.scheduler.AsyncSessionLocal", return_value=db_session), \
          patch("services.scheduler.scheduler.aggregate_hourly_uptime", new_callable=AsyncMock) as mock_rollup, \
          patch("services.scheduler.scheduler.purge_old_check_results", new_callable=AsyncMock) as mock_purge, \
@@ -134,3 +136,28 @@ async def test_telemetry_maintenance_loop_triggers(db_session: AsyncSession):
 
         assert mock_rollup.called
         assert mock_purge.called
+        assert mock_redis.set.called
+
+
+@pytest.mark.asyncio
+async def test_telemetry_maintenance_loop_lock_skipped(db_session: AsyncSession):
+    fake_time = datetime(2026, 9, 23, 3, 15, tzinfo=timezone.utc)
+    mock_dt = MagicMock()
+    mock_dt.now.return_value = fake_time
+    mock_redis = AsyncMock()
+    mock_redis.set = AsyncMock(return_value=False)
+
+    with patch("services.scheduler.scheduler.datetime", mock_dt), \
+         patch("services.scheduler.scheduler.get_redis_client", return_value=mock_redis), \
+         patch("services.scheduler.scheduler.AsyncSessionLocal", return_value=db_session), \
+         patch("services.scheduler.scheduler.aggregate_hourly_uptime", new_callable=AsyncMock) as mock_rollup, \
+         patch("services.scheduler.scheduler.purge_old_check_results", new_callable=AsyncMock) as mock_purge, \
+         patch("services.scheduler.scheduler.asyncio.sleep", side_effect=asyncio.CancelledError):
+
+        try:
+            await run_telemetry_maintenance_loop()
+        except asyncio.CancelledError:
+            pass
+
+        assert not mock_rollup.called
+        assert not mock_purge.called
