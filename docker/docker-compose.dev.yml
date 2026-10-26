@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-uptime_guardian}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
     healthcheck:
@@ -16,6 +16,19 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  migration:
+    build:
+      context: ..
+      dockerfile: services/api_gateway/Dockerfile
+    container_name: uptime-migration
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-uptime_guardian}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine
@@ -70,6 +83,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      migration:
+        condition: service_completed_successfully
 
   scheduler:
     build:
@@ -88,6 +103,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      migration:
+        condition: service_completed_successfully
 
   checker:
     build:
@@ -106,6 +123,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      migration:
+        condition: service_completed_successfully
 
   alerter:
     build:
@@ -126,6 +145,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      migration:
+        condition: service_completed_successfully
 
   prometheus:
     image: prom/prometheus:v2.54.1
