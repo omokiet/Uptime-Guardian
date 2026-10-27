@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import patch
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -105,3 +106,47 @@ async def test_alert_configs_not_found_errors(
         headers=auth_headers,
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_alert_configs_discord_webhook_and_ssrf(
+    async_client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+    test_user: User,
+):
+    monitor = Monitor(
+        user_id=test_user.id,
+        name="Webhook Test Monitor",
+        url="https://wh.example.com",
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    fake_safe_ip = [(None, None, None, None, ("93.184.216.34", 443))]
+    with patch("socket.getaddrinfo", return_value=fake_safe_ip):
+        resp_discord = await async_client.post(
+            f"/api/v1/monitors/{monitor.id}/alerts",
+            json={"channel": "discord", "destination": "https://discord.com/api/webhooks/123"},
+            headers=auth_headers,
+        )
+        assert resp_discord.status_code == 201
+        assert resp_discord.json()["channel"] == "discord"
+
+        resp_webhook = await async_client.post(
+            f"/api/v1/monitors/{monitor.id}/alerts",
+            json={"channel": "webhook", "destination": "https://example.com/alerts/webhook"},
+            headers=auth_headers,
+        )
+        assert resp_webhook.status_code == 201
+        assert resp_webhook.json()["channel"] == "webhook"
+
+    fake_private_ip = [(None, None, None, None, ("127.0.0.1", 80))]
+    with patch("socket.getaddrinfo", return_value=fake_private_ip):
+        resp_ssrf = await async_client.post(
+            f"/api/v1/monitors/{monitor.id}/alerts",
+            json={"channel": "webhook", "destination": "http://127.0.0.1:8000/internal"},
+            headers=auth_headers,
+        )
+        assert resp_ssrf.status_code == 422

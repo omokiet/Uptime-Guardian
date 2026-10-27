@@ -1,6 +1,7 @@
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from services.api_gateway.dependencies import get_current_user
 from services.api_gateway.rate_limiter import rate_limit_login, rate_limit_register
@@ -32,7 +33,14 @@ async def register(user_in: UserCreate, db: Annotated[AsyncSession, Depends(get_
         password_hash=hash_password(user_in.password),
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email đã được đăng ký",
+        )
     await db.refresh(user)
     return user
 

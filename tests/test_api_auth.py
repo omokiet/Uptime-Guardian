@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import AsyncClient
+from sqlalchemy.exc import IntegrityError
 from services.api_gateway.main import app
 from services.api_gateway.rate_limiter import (
     get_client_ip,
@@ -139,7 +140,8 @@ async def test_auth_rate_limiter_restores_missing_ttl(async_client: AsyncClient)
     mock_redis.pipeline.return_value = mock_pipe
     mock_redis.expire = AsyncMock()
 
-    with patch("services.api_gateway.rate_limiter.get_redis_client", return_value=mock_redis):
+    with patch("services.api_gateway.rate_limiter.get_redis_client", return_value=mock_redis), \
+         patch("services.api_gateway.rate_limiter.settings.TRUST_PROXY", True):
         await async_client.post(
             "/api/v1/auth/login",
             json={"email": "ttl_restore@example.com", "password": "wrongpassword"},
@@ -151,11 +153,17 @@ async def test_auth_rate_limiter_restores_missing_ttl(async_client: AsyncClient)
 def test_auth_get_client_ip_headers():
     req_forwarded = MagicMock()
     req_forwarded.headers = {"X-Forwarded-For": "103.21.244.2, 192.168.1.1"}
-    assert get_client_ip(req_forwarded) == "103.21.244.2"
+    req_forwarded.client.host = "10.0.0.5"
 
-    req_real = MagicMock()
-    req_real.headers = {"X-Real-IP": "198.51.100.5"}
-    assert get_client_ip(req_real) == "198.51.100.5"
+    with patch("services.api_gateway.rate_limiter.settings.TRUST_PROXY", False):
+        assert get_client_ip(req_forwarded) == "10.0.0.5"
+
+    with patch("services.api_gateway.rate_limiter.settings.TRUST_PROXY", True):
+        assert get_client_ip(req_forwarded) == "103.21.244.2"
+
+        req_real = MagicMock()
+        req_real.headers = {"X-Real-IP": "198.51.100.5"}
+        assert get_client_ip(req_real) == "198.51.100.5"
 
     req_client = MagicMock()
     req_client.headers = {}
@@ -166,3 +174,17 @@ def test_auth_get_client_ip_headers():
     req_none.headers = {}
     req_none.client = None
     assert get_client_ip(req_none) == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_register_race_condition_integrity_error(async_client: AsyncClient):
+    with patch(
+        "sqlalchemy.ext.asyncio.AsyncSession.commit",
+        side_effect=IntegrityError("duplicate key", params=None, orig=Exception("unique constraint")),
+    ):
+        resp = await async_client.post(
+            "/api/v1/auth/register",
+            json={"email": "race_user@example.com", "password": "password123"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Email đã được đăng ký"

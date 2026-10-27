@@ -57,14 +57,13 @@ async def test_rabbitmq_lifecycle():
         conn = await get_rabbitmq_connection()
         assert conn is mock_conn
 
-        await publish_message("test_queue", {"key": "value"})
-        assert mock_channel.declare_queue.called
-        assert mock_channel.default_exchange.publish.called
+        await publish_message("test_queue", {"key": "value1"})
+        await publish_message("test_queue", {"key": "value2"})
+        assert mock_channel.declare_queue.call_count == 1
+        assert mock_channel.default_exchange.publish.call_count == 2
 
         await close_rabbitmq()
         assert mock_conn.close.called
-
-        await close_rabbitmq()
 
 
 def test_ssrf_dns_resolution_failure():

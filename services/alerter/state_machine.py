@@ -52,18 +52,23 @@ async def handle_alert_event(event: dict) -> None:
     if not monitor_id_str:
         return
 
-    m_uuid = uuid.UUID(monitor_id_str)
+    try:
+        m_uuid = uuid.UUID(monitor_id_str)
+    except ValueError:
+        return
     redis_client = get_redis_client()
     lock_key = f"lock:alert:{monitor_id_str}"
     state_key = f"monitor:state:{monitor_id_str}"
 
-    # Distributed lock via SETNX to avoid race conditions during state transitions
-    lock_acquired = await redis_client.set(lock_key, "1", ex=10, nx=True)
-    if not lock_acquired:
+    lock_acquired = False
+    for _ in range(4):
+        if await redis_client.set(lock_key, "1", ex=10, nx=True):
+            lock_acquired = True
+            break
         await asyncio.sleep(0.5)
-        lock_acquired = await redis_client.set(lock_key, "1", ex=10, nx=True)
-        if not lock_acquired:
-            return
+
+    if not lock_acquired:
+        raise TimeoutError(f"Could not acquire alert lock for monitor {monitor_id_str}")
 
     try:
         now_ms = int(time.time() * 1000)

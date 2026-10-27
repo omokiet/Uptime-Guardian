@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, ValidationInfo, field_validator
 from services.common.ssrf import validate_target_url
 
 
@@ -109,9 +109,17 @@ class MonitorDetailResponse(MonitorResponse):
 
 
 class AlertConfigCreate(BaseModel):
-    channel: str = Field(pattern="^(telegram|email|webhook)$")
+    channel: str = Field(pattern="^(telegram|email|discord|webhook)$")
     destination: str = Field(min_length=1)
     is_enabled: bool = True
+
+    @field_validator("destination")
+    @classmethod
+    def check_destination_safety(cls, value: str, info: ValidationInfo) -> str:
+        channel = info.data.get("channel")
+        if channel in ("discord", "webhook"):
+            validate_target_url(value)
+        return value
 
 
 class AlertConfigResponse(BaseModel):
