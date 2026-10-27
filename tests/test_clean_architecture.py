@@ -245,9 +245,11 @@ async def test_alert_service_operations():
     configs = await service.list_alert_configs(current_user=user, monitor_id=monitor.id)
     assert len(configs) == 1
 
-    created_cfg = await service.create_alert_config(
-        current_user=user,
-        monitor_id=monitor.id,
-        alert_in=AlertConfigCreate(channel="webhook", destination="https://webhook"),
-    )
-    assert created_cfg.channel == "webhook"
+    fake_safe_ip = [(None, None, None, None, ("93.184.216.34", 443))]
+    with patch("socket.getaddrinfo", return_value=fake_safe_ip):
+        created_cfg = await service.create_alert_config(
+            current_user=user,
+            monitor_id=monitor.id,
+            alert_in=AlertConfigCreate(channel="webhook", destination="https://webhook"),
+        )
+        assert created_cfg.channel == "webhook"

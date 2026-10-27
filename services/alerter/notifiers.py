@@ -5,6 +5,7 @@ import smtplib
 from typing import Optional
 import httpx
 from services.common.config import settings
+from services.common.transport import AntiRebindingTransport
 
 
 class BaseNotifier(abc.ABC):
@@ -38,8 +39,27 @@ class DiscordNotifier(BaseNotifier):
             return False
 
         payload = {"content": message}
+        transport = AntiRebindingTransport(verify=True)
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(transport=transport, timeout=5.0) as client:
+                resp = await client.post(destination, json=payload)
+                return 200 <= resp.status_code < 300
+        except Exception:
+            return False
+
+
+class WebhookNotifier(BaseNotifier):
+    async def send(self, destination: str, message: str, title: str = "") -> bool:
+        if not destination or not destination.startswith(("http://", "https://")):
+            return False
+
+        payload = {
+            "title": title or "Uptime Guardian Alert",
+            "message": message,
+        }
+        transport = AntiRebindingTransport(verify=True)
+        try:
+            async with httpx.AsyncClient(transport=transport, timeout=5.0) as client:
                 resp = await client.post(destination, json=payload)
                 return 200 <= resp.status_code < 300
         except Exception:
@@ -77,6 +97,7 @@ NOTIFIER_REGISTRY: dict[str, BaseNotifier] = {
     "telegram": TelegramNotifier(),
     "discord": DiscordNotifier(),
     "email": EmailNotifier(),
+    "webhook": WebhookNotifier(),
 }
 
 

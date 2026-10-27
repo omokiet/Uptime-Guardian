@@ -8,6 +8,7 @@ from services.alerter.notifiers import (
     DiscordNotifier,
     EmailNotifier,
     TelegramNotifier,
+    WebhookNotifier,
     get_notifier,
     send_notification,
 )
@@ -124,12 +125,14 @@ async def test_notify_channels_fallback(db_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_handle_alert_event_edge_cases():
     await handle_alert_event({})
+    await handle_alert_event({"monitor_id": "not-a-valid-uuid"})
 
     mock_redis = AsyncMock()
     mock_redis.set = AsyncMock(return_value=False)
     with patch("services.alerter.state_machine.get_redis_client", return_value=mock_redis), \
          patch("asyncio.sleep", new_callable=AsyncMock):
-        await handle_alert_event({"monitor_id": str(uuid.uuid4())})
+        with pytest.raises(TimeoutError, match="Could not acquire alert lock"):
+            await handle_alert_event({"monitor_id": str(uuid.uuid4())})
 
 
 @pytest.mark.asyncio
@@ -267,6 +270,7 @@ async def test_get_notifier_and_send_notification():
     assert isinstance(get_notifier("TELEGRAM"), TelegramNotifier)
     assert isinstance(get_notifier("discord"), DiscordNotifier)
     assert isinstance(get_notifier("email"), EmailNotifier)
+    assert isinstance(get_notifier("webhook"), WebhookNotifier)
     assert get_notifier("unsupported") is None
     assert get_notifier("") is None
 
@@ -277,6 +281,24 @@ async def test_get_notifier_and_send_notification():
         result = await send_notification("telegram", "123", "msg", "title")
         assert result is True
         mock_send.assert_called_once_with("123", "msg", title="title")
+
+
+@pytest.mark.asyncio
+async def test_webhook_notifier_scenarios():
+    notifier = WebhookNotifier()
+    assert await notifier.send("", "msg") is False
+    assert await notifier.send("ftp://example.com", "msg") is False
+
+    mock_resp_200 = httpx.Response(200, request=httpx.Request("POST", "https://example.com"))
+    with patch("httpx.AsyncClient.post", return_value=mock_resp_200):
+        assert await notifier.send("https://example.com/webhook", "msg", "Alert Title") is True
+
+    mock_resp_500 = httpx.Response(500, request=httpx.Request("POST", "https://example.com"))
+    with patch("httpx.AsyncClient.post", return_value=mock_resp_500):
+        assert await notifier.send("https://example.com/webhook", "msg") is False
+
+    with patch("httpx.AsyncClient.post", side_effect=httpx.ConnectError("Network error")):
+        assert await notifier.send("https://example.com/webhook", "msg") is False
 
 
 @pytest.mark.asyncio

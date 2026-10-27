@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     CONSECUTIVE_THRESHOLD: int = 3
 
     RATE_LIMIT_ENABLED: bool = True
+    TRUST_PROXY: bool = False
     AUTH_LOGIN_RATE_LIMIT: int = 10
     AUTH_LOGIN_WINDOW_SECONDS: int = 60
     AUTH_REGISTER_RATE_LIMIT: int = 5

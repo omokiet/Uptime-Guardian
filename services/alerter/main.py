@@ -17,12 +17,20 @@ async def run_alerter_worker() -> None:
 
     async with queue.iterator() as queue_iter:
         async for message in queue_iter:
-            async with message.process(requeue=False):
+            try:
+                payload = json.loads(message.body.decode("utf-8"))
+            except Exception as exc:
+                logger.error("Lỗi decode alert event JSON từ RabbitMQ: %s", exc)
+                async with message.process(requeue=False):
+                    pass
+                continue
+
+            async with message.process(requeue=True):
                 try:
-                    payload = json.loads(message.body.decode("utf-8"))
                     await handle_alert_event(payload)
                 except Exception as exc:
                     logger.error("Lỗi xử lý alert event từ RabbitMQ: %s", exc, exc_info=True)
+                    raise
 
 
 async def main() -> None:
