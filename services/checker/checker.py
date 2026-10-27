@@ -15,7 +15,12 @@ from services.common.metrics import (
 from services.common.models import CheckResult
 from services.common.rabbitmq import publish_message
 from services.common.redis_client import get_redis_client
-from services.common.ssrf import SSRFValidationError, validate_target_url
+from services.common.ssrf import (
+    SSRFValidationError,
+    resolve_safe_ip,
+    validate_target_url,
+)
+from services.common.transport import AntiRebindingTransport
 
 _httpx_client: Optional[httpx.AsyncClient] = None
 
@@ -28,8 +33,12 @@ def get_httpx_client() -> httpx.AsyncClient:
             max_keepalive_connections=50,
             keepalive_expiry=30.0,
         )
-        _httpx_client = httpx.AsyncClient(
+        transport = AntiRebindingTransport(
             limits=limits,
+            verify=True,
+        )
+        _httpx_client = httpx.AsyncClient(
+            transport=transport,
             verify=True,
         )
     return _httpx_client
@@ -42,12 +51,18 @@ async def close_httpx_client() -> None:
         _httpx_client = None
 
 
-async def check_ssl_days(hostname: str, port: int = 443, timeout: float = 5.0) -> Optional[int]:
+async def check_ssl_days(
+    hostname: str,
+    port: int = 443,
+    timeout: float = 5.0,
+    server_ip: Optional[str] = None,
+) -> Optional[int]:
     try:
+        connect_target = server_ip or hostname
         context = ssl.create_default_context()
         async with asyncio.timeout(timeout):
             reader, writer = await asyncio.open_connection(
-                hostname,
+                connect_target,
                 port,
                 ssl=context,
                 server_hostname=hostname,
@@ -77,16 +92,26 @@ async def execute_check(
     timeout_seconds: int = 10,
     expected_status_code: int = 200,
 ) -> Tuple[bool, Optional[int], Optional[int], Optional[str], Optional[int]]:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False, None, None, "Chỉ hỗ trợ giao thức http hoặc https", None
+    if not parsed.hostname:
+        return False, None, None, "URL không có hostname hợp lệ", None
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
-        validate_target_url(url)
+        safe_ip = resolve_safe_ip(parsed.hostname, port)
     except SSRFValidationError as exc:
         return False, None, None, str(exc), None
 
-    parsed = urlparse(url)
     ssl_days: Optional[int] = None
-    if parsed.scheme == "https" and parsed.hostname:
-        port = parsed.port or 443
-        ssl_days = await check_ssl_days(parsed.hostname, port, timeout=min(5.0, float(timeout_seconds)))
+    if parsed.scheme == "https":
+        ssl_days = await check_ssl_days(
+            parsed.hostname,
+            port,
+            timeout=min(5.0, float(timeout_seconds)),
+            server_ip=safe_ip,
+        )
 
     start_time = time.perf_counter()
     current_url = url

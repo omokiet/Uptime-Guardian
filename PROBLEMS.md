@@ -15,12 +15,14 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 2. Bảo mật: DNS Rebinding (TOCTOU)
-- **Vị trí:** `services/common/ssrf.py` và `services/checker/checker.py`
-- **Vấn đề:** Thời điểm kiểm tra DNS (`validate_target_url`) và thời điểm gửi request thực tế (`httpx.request`) là hai thao tác phân giải DNS độc lập (Time-of-Check to Time-of-Use).
-- **Rủi ro:** Kẻ tấn công cấu hình máy chủ DNS trả về IP công cộng ở lần phân giải đầu tiên (TTL = 0), nhưng trả về `127.0.0.1` ở lần phân giải thứ hai của httpx.
-- **Giải pháp đề xuất:** 
-  - Triển khai Custom Async Transport hoặc hook socket kết nối TCP để kiểm tra IP thực tế ngay trước khi handshake bắt đầu.
+## 2. [ĐÃ XỬ LÝ] Bảo mật: DNS Rebinding (TOCTOU)
+- **Vị trí:** `services/common/ssrf.py`, `services/common/transport.py` và `services/checker/checker.py`
+- **Trạng thái:** Đã xử lý (Branch `feature/anti-dns-rebinding`).
+- **Giải pháp đã triển khai:**
+  - Tách hàm `is_ip_allowed` và `resolve_safe_ip` tại `services/common/ssrf.py`, kiểm tra toàn bộ các bản ghi IP được phân giải (IPv4/IPv6). Nếu bất kỳ bản ghi nào thuộc dải private/loopback/link-local/multicast/reserved thì từ chối ngay.
+  - Xây dựng `AntiRebindingNetworkBackend` kế thừa `httpcore._backends.auto.AutoBackend`: phân giải DNS và xác thực IP trực tiếp ngay trước khi kết nối TCP, pin socket kết nối thẳng tới `safe_ip` đã được xác thực, ngăn chặn triệt để TOCTOU giữa bước check và bước connect.
+  - Xây dựng `AntiRebindingTransport` kế thừa `httpx.AsyncHTTPTransport`, tích hợp vào `get_httpx_client()`.
+  - Cập nhật `check_ssl_days` ghim IP kết nối trực tiếp tới `safe_ip` đồng thời giữ nguyên `server_hostname` để xác thực TLS certificate và SNI chuẩn xác.
 
 ---
 
