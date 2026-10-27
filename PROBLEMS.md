@@ -34,13 +34,15 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 4. Khả năng mở rộng: Kênh thông báo cảnh báo cứng (Hardcoded Telegram)
-- **Vị trí:** `services/alerter/state_machine.py`
-- **Vấn đề:** Hàm gửi cảnh báo đang gắn chặt với API của Telegram (`send_telegram_alert`), mặc dù bảng `alert_configs` đã có trường `channel`.
-- **Rủi ro:** Thiếu hỗ trợ các kênh quan trọng như Discord Webhook, Slack Webhook, Email SMTP / SES.
-- **Giải pháp đề xuất:**
-  - Áp dụng Strategy Pattern / Adapter Interface: Khai báo interface `NotificationChannel` với các implementation cụ thể (`TelegramNotifier`, `DiscordNotifier`, `EmailNotifier`).
-  - Đọc `AlertConfig.channel` để điều phối adapter phù hợp.
+## 4. [ĐÃ XỬ LÝ] Khả năng mở rộng: Kênh thông báo cảnh báo cứng (Hardcoded Telegram)
+- **Vị trí:** `services/alerter/notifiers.py` & `services/alerter/state_machine.py`
+- **Trạng thái:** Đã xử lý (Branch `feature/notification-strategy-pattern`).
+- **Giải pháp đã triển khai:**
+  - Triển khai Strategy Pattern qua `BaseNotifier` interface tại `services/alerter/notifiers.py`.
+  - Hỗ trợ đầy đủ các kênh: `TelegramNotifier`, `DiscordNotifier` (HTTP Webhook), `EmailNotifier` (`smtplib` + `EmailMessage` bất đồng bộ qua `asyncio.to_thread`).
+  - Đăng ký và điều phối linh hoạt qua `NOTIFIER_REGISTRY` và `get_notifier()`.
+  - Cơ chế cách ly lỗi: Lỗi của một kênh không làm ngắt các kênh còn lại; fallback an toàn về `TELEGRAM_DEFAULT_CHAT_ID` khi chưa có kênh nào gửi thành công.
+  - Mở rộng cấu hình SMTP trong `services/common/config.py`.
 
 ---
 

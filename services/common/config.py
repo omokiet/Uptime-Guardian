@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     AUTH_REGISTER_RATE_LIMIT: int = 5
     AUTH_REGISTER_WINDOW_SECONDS: int = 300
 
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = ""
+    SMTP_USE_TLS: bool = True
+
     model_config = {
         "env_file": ".env",
         "extra": "ignore"

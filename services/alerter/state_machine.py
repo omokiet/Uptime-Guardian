@@ -1,8 +1,8 @@
 import asyncio
 import time
 import uuid
-import httpx
 from sqlalchemy import select
+from services.alerter.notifiers import get_notifier
 from services.common.config import settings
 from services.common.database import AsyncSessionLocal
 from services.common.models import AlertConfig, Monitor
@@ -10,21 +10,10 @@ from services.common.redis_client import get_redis_client
 
 
 async def send_telegram_alert(chat_id: str, message: str) -> bool:
-    if not settings.TELEGRAM_BOT_TOKEN or not chat_id:
-        return False
-
-    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "Markdown",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(url, json=payload)
-            return resp.status_code == 200
-    except Exception:
-        return False
+    notifier = get_notifier("telegram")
+    if notifier:
+        return await notifier.send(chat_id, message)
+    return False
 
 
 async def notify_channels(monitor_id: uuid.UUID, monitor_name: str, message: str) -> None:
@@ -37,10 +26,18 @@ async def notify_channels(monitor_id: uuid.UUID, monitor_name: str, message: str
         configs = result.scalars().all()
 
     notified = False
+    title = f"Uptime Guardian: {monitor_name}"
     for cfg in configs:
         if cfg.channel == "telegram":
-            await send_telegram_alert(cfg.destination, message)
-            notified = True
+            sent = await send_telegram_alert(cfg.destination, message)
+            if sent:
+                notified = True
+        else:
+            notifier = get_notifier(cfg.channel)
+            if notifier:
+                sent = await notifier.send(cfg.destination, message, title=title)
+                if sent:
+                    notified = True
 
     if not notified and settings.TELEGRAM_DEFAULT_CHAT_ID:
         await send_telegram_alert(settings.TELEGRAM_DEFAULT_CHAT_ID, message)
