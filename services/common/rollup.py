@@ -4,6 +4,7 @@ from typing import Optional
 from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from services.common.models import CheckResult, HourlyUptimeSummary
+from services.common.partitions import _get_dialect_name, drop_expired_partitions
 
 
 async def aggregate_hourly_uptime(
@@ -85,12 +86,47 @@ async def aggregate_hourly_uptime(
     return processed_count
 
 
+async def backfill_missing_hourly_summaries(
+    session: AsyncSession,
+    hours: int = 24,
+    current_time: Optional[datetime] = None,
+) -> int:
+    base_time = current_time or datetime.now(timezone.utc)
+    base_hour = base_time.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+    total_backfilled = 0
+    for h in range(1, hours + 1):
+        target_hour = base_hour - timedelta(hours=h)
+        next_hour = target_hour + timedelta(hours=1)
+
+        summary_count_stmt = select(func.count(HourlyUptimeSummary.id)).where(
+            HourlyUptimeSummary.hour_timestamp == target_hour
+        )
+        existing_summaries = await session.scalar(summary_count_stmt)
+        if existing_summaries and existing_summaries > 0:
+            continue
+
+        check_count_stmt = select(func.count(CheckResult.id)).where(
+            CheckResult.created_at >= target_hour,
+            CheckResult.created_at < next_hour,
+        )
+        has_checks = await session.scalar(check_count_stmt)
+        if has_checks and has_checks > 0:
+            processed = await aggregate_hourly_uptime(session, target_hour=target_hour)
+            total_backfilled += processed
+
+    return total_backfilled
+
+
 async def purge_old_check_results(
     session: AsyncSession,
     retention_days: int = 7,
     current_time: Optional[datetime] = None,
     batch_size: int = 5000,
 ) -> int:
+    if _get_dialect_name(session) == "postgresql":
+        await drop_expired_partitions(session, retention_days=retention_days, current_time=current_time)
+
     base_time = current_time or datetime.now(timezone.utc)
     cutoff = base_time - timedelta(days=retention_days)
 

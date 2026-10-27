@@ -13,8 +13,13 @@ from services.common.metrics import (
 )
 from services.common.models import Monitor
 from services.common.rabbitmq import publish_message
+from services.common.partitions import ensure_future_partitions
 from services.common.redis_client import get_redis_client
-from services.common.rollup import aggregate_hourly_uptime, purge_old_check_results
+from services.common.rollup import (
+    aggregate_hourly_uptime,
+    backfill_missing_hourly_summaries,
+    purge_old_check_results,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +127,13 @@ async def run_scheduler_loop() -> None:
 async def run_telemetry_maintenance_loop() -> None:
     redis_client = get_redis_client()
 
+    try:
+        async with AsyncSessionLocal() as session:
+            await ensure_future_partitions(session, weeks_ahead=4)
+            await backfill_missing_hourly_summaries(session, hours=24)
+    except Exception as exc:
+        logger.warning("Startup maintenance tasks failed: %s", exc)
+
     while True:
         try:
             now = datetime.now(timezone.utc)
@@ -130,11 +142,13 @@ async def run_telemetry_maintenance_loop() -> None:
                 if await redis_client.set(rollup_lock_key, "1", nx=True, ex=3600):
                     async with AsyncSessionLocal() as session:
                         await aggregate_hourly_uptime(session)
+                        await backfill_missing_hourly_summaries(session, hours=24)
 
             if now.hour == 3 and now.minute >= 10:
                 retention_lock_key = f"lock:maintenance:retention:{now.strftime('%Y%m%d')}"
                 if await redis_client.set(retention_lock_key, "1", nx=True, ex=86400):
                     async with AsyncSessionLocal() as session:
+                        await ensure_future_partitions(session, weeks_ahead=4)
                         await purge_old_check_results(session, retention_days=7)
         except Exception as exc:
             logger.error("Telemetry maintenance loop failed: %s", exc, exc_info=True)
