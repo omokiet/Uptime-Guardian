@@ -58,11 +58,13 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 6. Thiết kế mã nguồn: Thiếu phân tầng Clean Architecture ở API Gateway
-- **Vị trí:** `services/api_gateway/routers/monitors.py`
-- **Vấn đề:** Logic định tuyến (HTTP Router), logic nghiệp vụ và truy vấn cơ sở dữ liệu SQLAlchemy đang nằm chung trong một tệp.
-- **Giải pháp đề xuất:**
-  - Phân tách cấu trúc thành các tầng: `routers/` (HTTP controller) -> `services/` (Business logic) -> `repositories/` (Database access).
+## 6. [ĐÃ XỬ LÝ] Thiết kế mã nguồn: Thiếu phân tầng Clean Architecture ở API Gateway
+- **Vị trí:** `services/api_gateway/routers/monitors.py`, `alerts.py`, `services/`, `repositories/`
+- **Trạng thái:** Đã xử lý (Branch `refactor/api-gateway-layers`).
+- **Giải pháp đã triển khai:**
+  - Tách tầng Repository: `MonitorRepository`, `CheckResultRepository`, `AlertConfigRepository`, `HourlySummaryRepository` phụ trách truy vấn SQLAlchemy thuần túy, không commit transaction trong repo.
+  - Tách tầng Service: `MonitorService`, `AlertService` phụ trách nghiệp vụ, phân quyền ownership theo `current_user`, điều phối Redis (`zadd`/`zrem`/`delete`) kèm error handling fail-safe, quản lý transaction commit.
+  - Tầng Router: `monitors.py`, `alerts.py` trở thành thin controller, chỉ tiếp nhận HTTP request, dependency injection, gọi service và trả về schema DTO.
 
 ---
 
