@@ -52,6 +52,7 @@ ENV/
 .notes/
 HANDOFF.md
 CHECKLIST*.md
+DEVOPS_GUIDE.md
 
 # AI Agent Working Memory & Configs
 .agents/
