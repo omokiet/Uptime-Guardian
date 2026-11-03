@@ -10,8 +10,8 @@ services:
     container_name: uptime-caddy
     restart: always
     ports:
-      - "80:80"
-      - "443:443"
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-443}:443"
     environment:
       DOMAIN: ${DOMAIN:-localhost}
     volumes:
@@ -206,6 +206,8 @@ services:
     image: grafana/grafana:11.2.0
     container_name: uptime-grafana
     restart: always
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}

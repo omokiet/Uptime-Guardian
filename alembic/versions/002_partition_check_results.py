@@ -20,6 +20,7 @@ def upgrade() -> None:
         return
 
     op.execute("ALTER TABLE check_results RENAME TO check_results_old;")
+    op.execute("DROP INDEX IF EXISTS idx_check_results_monitor_created;")
 
     op.execute(
         """
@@ -38,8 +39,14 @@ def upgrade() -> None:
         """
     )
 
-    op.execute("CREATE TABLE check_results_default PARTITION OF check_results DEFAULT;")
-    op.execute("CREATE INDEX idx_check_results_monitor_created ON check_results (monitor_id, created_at DESC);")
+    op.execute(
+        "CREATE TABLE check_results_default "
+        "PARTITION OF check_results DEFAULT;"
+    )
+    op.execute(
+        "CREATE INDEX idx_check_results_monitor_created "
+        "ON check_results (monitor_id, created_at DESC);"
+    )
 
     op.execute(
         """
@@ -61,7 +68,10 @@ def downgrade() -> None:
     if bind.dialect.name != "postgresql":
         return
 
-    op.execute("ALTER TABLE check_results RENAME TO check_results_partitioned;")
+    op.execute(
+        "ALTER TABLE check_results RENAME TO check_results_partitioned;"
+    )
+    op.execute("DROP INDEX IF EXISTS idx_check_results_monitor_created;")
 
     op.execute(
         """
@@ -78,7 +88,10 @@ def downgrade() -> None:
         );
         """
     )
-    op.execute("CREATE INDEX idx_check_results_monitor_created ON check_results (monitor_id, created_at DESC);")
+    op.execute(
+        "CREATE INDEX idx_check_results_monitor_created "
+        "ON check_results (monitor_id, created_at DESC);"
+    )
 
     op.execute(
         """
