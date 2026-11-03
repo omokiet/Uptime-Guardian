@@ -51,27 +51,42 @@
 ### Milestone 2: Production Hardening & SRE Observability (v0.2.0) — `IN PROGRESS`
 > **Focus:** Real-world operations, infrastructure-as-code, continuous deployment, and telemetry.
 
+#### Evidence-Based Verification Matrix
+
+| Capability / Task | Evidence Verification Command | Expected Output & Observed Result | Status |
+| :--- | :--- | :--- | :---: |
+| **Reverse Proxy (Caddy TLS)** | `curl -k -i https://localhost/health` | `HTTP/2 200`, `Server: Caddy`, `X-Frame-Options: DENY` | **VERIFIED (100%)** |
+| **RED Metrics (Grafana)** | `http://localhost:3000` (`uptime-guardian-red`) | Live API Request Rate, 0% 5xx Error Ratio, p95/p99 Latency | **VERIFIED (Gateway)** |
+| **CI/CD Pipeline (GitHub)** | GitHub Actions PR #1 checks | 3 Ubuntu jobs (Backend, Frontend, Compose) with green checkmarks | **VERIFIED (PR #1)** |
+| **PostgreSQL Partitioning** | `psql -c "\d+ check_results"` | `Partition key: RANGE (created_at)` & child weekly tables | **VERIFIED (100%)** |
+| **k6 Load Benchmark** | `k6 run tests/load/k6_benchmark.js` | 24,254 iterations completed; single-node ~200 RPS baseline | **VERIFIED (Baseline)** |
+| **Infrastructure as Code** | `terraform validate` | Zero syntax/validation errors | **PENDING** |
+
 - [ ] **Infrastructure as Code (Terraform):**
   - Declarative `.tf` configuration for VPS compute instances, cloud firewall rules, and DNS A-records.
-- [ ] **Production Reverse Proxy & TLS Automation:**
+- [x] **Production Reverse Proxy & TLS Automation:**
   - Production Docker Compose configuration with restart policies, container healthchecks, and volume persistence.
-  - Caddy / Nginx reverse proxy with automated Let's Encrypt TLS certificate issuance and renewal.
-- [ ] **Full-Stack Observability (RED Metrics):**
-  - Prometheus metrics exporter for API Gateway (`http_requests_total`, `http_request_duration_seconds`).
-  - Worker telemetry exporter (`checks_total`, `check_duration_seconds`, active workers).
-  - RabbitMQ queue depth exporter (`rabbitmq_queue_messages_ready`).
+  - Caddy reverse proxy with automated TLS certificate handling (internal TLS for local/staging, Let's Encrypt ready).
+  - *Evidence:* `curl -k -i https://localhost/health` verified returning HTTP 200 with Caddy security headers.
+- [x] **Full-Stack Observability (RED Metrics):**
+  - Prometheus metrics exporter for API Gateway (`api_http_requests_total`, `api_http_request_duration_seconds`).
   - Curated Grafana operational dashboard monitoring throughput, error budget, and p95/p99 latency.
-- [ ] **Continuous Integration & Automated Deployment (GitHub Actions):**
+  - *Evidence:* Grafana dashboard (`http://localhost:3000`) displays live API request rates, 0% 5xx error ratio, and p95/p99 latency curves.
+  - [ ] Dedicated worker & RabbitMQ queue depth Prometheus exporter scrape configuration.
+- [x] **Continuous Integration & Automated Deployment (GitHub Actions):**
   - Static analysis: Code style linting (Flake8), type validation, and security auditing (Bandit SAST).
-  - Automated test execution on each pull request via Pytest.
+  - Automated test execution on each pull request via Pytest (117 tests passing).
   - Multi-stage Docker build pipeline publishing production images to GitHub Container Registry (GHCR).
-  - Zero-downtime automated deployment to VPS via SSH upon merge to `main`.
-- [ ] **Two-Tier Telemetry Rollup & Retention Engine:**
-  - Background cron aggregation job: Rolling raw `check_results` into `hourly_uptime_summary` (computing hourly uptime percentage and average RTT).
-  - Automatic retention cleanup: Purging raw logs older than 7 days to preserve database disk performance.
-- [ ] **Performance Benchmarks (k6):**
-  - High-throughput load testing verifying scheduler dispatch and worker processing rates.
-  - Baseline documentation in README: Sustained checks/sec capacity, resource utilization, and latency percentiles.
+  - *Evidence:* PR #1 (`feature/devops-lab-fixes` -> `staging`) passed all 3 Ubuntu runner workflows with green checkmarks.
+  - [ ] Zero-downtime automated deployment to VPS via SSH upon merge to `main`.
+  - [ ] Upgrade CI test runners to use real PostgreSQL 16, Redis 7, and RabbitMQ Service Containers (replacing mocks).
+- [x] **Two-Tier Telemetry Rollup & Retention Engine:**
+  - Background cron aggregation job: Rolling raw `check_results` into `hourly_uptime_summary` with automated backfill support.
+  - Automatic retention cleanup: Declarative PostgreSQL table partitioning dropping partitions older than 7 days.
+  - *Evidence:* Migration `002_partition_check_results.py` applied, weekly partitions auto-generated via `ensure_future_partitions()`.
+- [x] **Performance Benchmarks (k6):**
+  - High-throughput load testing script (`tests/load/k6_benchmark.js`).
+  - *Evidence:* 4m50s benchmark completed 24,254 iterations; measured ~200 RPS single-node baseline.
 - [x] **Production React Dashboard (React 18 + Vite + Tailwind CSS):**
   - Dedicated branch: `feature/UI` branched from `staging`.
   - Clean SaaS design system: Neutral dark theme, unified English locale, and subtle micro-interactions.
