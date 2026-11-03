@@ -3,10 +3,8 @@
 }
 
 {$DOMAIN:localhost} {
-    @local host localhost 127.0.0.1 ::1
-    handle @local {
+    
         tls internal
-    }
 
     handle /api/* {
         reverse_proxy api-gateway:8000
