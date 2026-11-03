@@ -64,7 +64,7 @@ An open-source, resilient, self-hosted distributed uptime monitoring platform en
    - Hourly background aggregation into `hourly_uptime_summary` for fast 30-day dashboard rendering without bloating PostgreSQL.
 5. **Production SRE Observability:**
    - RED metrics (Rate, Errors, Duration) collected by Prometheus and displayed on Grafana.
-   - k6 load tested up to 2,000+ checks/second.
+   - Target capacity designed for >2,000 checks/second (single-node baseline benchmark: ~200 RPS via k6).
 
 ---
 
@@ -100,7 +100,7 @@ uptime-guardian/
 
 ##  Roadmap Quick View
 
-- **Milestone 1 (v0.1.0): Core Distributed Engine (Completed)** — Database schema, FastAPI Gateway, atomic Redis ZSET scheduler, idempotent checker, alert state machine, and real-time dashboard.
+- **Milestone 1 (v0.1.0): Core Distributed Engine (Completed)** — Database schema, FastAPI Gateway, atomic Redis ZSET scheduler, idempotent checker, alert state machine, and polling monitoring dashboard (live WebSocket telemetry planned for v0.3.0).
 - **Milestone 2 (v0.2.0): Production Hardening & SRE Observability (In Progress)** — Terraform IaC, production TLS proxy, Prometheus/Grafana RED metrics, GitHub Actions CI/CD, and k6 load benchmarks.
 - **Milestone 3 (v0.3.0): Distributed Resilience & Scaling (Planned)** — k3s orchestration, queue-driven HPA auto-scaling, multi-region quorum validation, and live WebSocket telemetry.
 

@@ -115,37 +115,31 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 12. [CRITICAL] Bảo mật & Hợp đồng API: SSRF qua Notifier Webhook & Bất nhất Schema AlertConfig
-- **Vị trí:** `services/alerter/notifiers.py` (L36-47), `services/common/schemas.py` (L111-114)
-- **Mức độ nghiêm trọng:** **CRITICAL** (Lỗ hổng bảo mật SSRF + Lỗi logic nghiệp vụ).
-- **Vấn đề:**
-  - `DiscordNotifier` (và webhook nói chung) gửi POST trực tiếp tới `destination` do user cung cấp mà không qua kiểm tra anti-SSRF/DNS rebinding. Kẻ tấn công có thể cấu hình destination trỏ tới `169.254.169.254` hoặc các service nội bộ khác.
-  - Schema `AlertConfigCreate` chỉ cho phép regex `^(telegram|email|webhook)$` nhưng registry lại triển khai `telegram`, `discord`, `email`. Dẫn đến kênh `discord` bị 422 từ chối, còn `webhook` tạo được nhưng âm thầm không gửi đi vì thiếu handler.
-- **Rủi ro:** Alerter bị biến thành open proxy tấn công hệ thống nội bộ; người dùng không thể nhận cảnh báo Discord.
-- **Giai đoạn sửa chữa:** **TRƯỚC GIAI ĐOẠN TIẾP THEO (Trước P3)** — Hotfix bảo mật khẩn cấp.
-- **Giải pháp:**
-  - Áp dụng `validate_target_url` cho `destination` tại `AlertConfigCreate` và sử dụng `AntiRebindingTransport` trong `notifiers.py`.
-  - Cập nhật regex schema `^(telegram|email|discord|webhook)$`, đồng thời hỗ trợ generic webhook notifier.
+## 12. [ĐÃ XỬ LÝ] Bảo mật & Hợp đồng API: SSRF qua Notifier Webhook & Bất nhất Schema AlertConfig
+- **Vị trí:** `services/alerter/notifiers.py`, `services/common/schemas.py`
+- **Trạng thái:** Đã xử lý (Branch `feature/anti-dns-rebinding` & `fix/p0-security-performance`).
+- **Giải pháp đã triển khai:**
+  - Áp dụng `AntiRebindingTransport(verify=True)` bảo vệ các outbound request trong `DiscordNotifier` và `WebhookNotifier`.
+  - Cập nhật regex schema `AlertConfigCreate` sang `^(telegram|email|discord|webhook)$` và bổ sung field validator `check_destination_safety` gọi `validate_target_url` phòng thủ anti-SSRF.
 
 ---
 
-## 13. [CRITICAL] Hiệu năng & Scale: AMQP Channel Churn & Re-declare Queue trên mỗi tin nhắn
-- **Vị trí:** `services/common/rabbitmq.py` (`publish_message`, L16-30)
-- **Mức độ nghiêm trọng:** **CRITICAL** (Nghẽn cổ chai throughput toàn hệ thống khi chịu tải).
-- **Vấn đề:** Mỗi lần gọi `publish_message` đều thực hiện `async with connection.channel()`, gửi lệnh `declare_queue` đồng bộ sang RabbitMQ rồi đóng channel. Với tải 10,000 monitors dispatch liên tục, broker phải xử lý hàng nghìn AMQP channel handshakes và queue declarations/giây.
-- **Rủi ro:** RabbitMQ quá tải CPU, độ trễ dispatch job tăng vọt, nguy cơ connection drops.
-- **Giai đoạn sửa chữa:** **TRƯỚC GIAI ĐOẠN TIẾP THEO (Trước P3)** — Hạ tầng lõi dùng chung cho mọi service.
-- **Giải pháp:** Tái sử dụng channel dùng chung theo process/task, khai báo queue 1 lần duy nhất lúc khởi động service (lifespan/worker init), `publish_message` chỉ gửi trực tiếp payload qua default exchange.
+## 13. [ĐÃ XỬ LÝ] Hiệu năng & Scale: AMQP Channel Churn & Re-declare Queue trên mỗi tin nhắn
+- **Vị trí:** `services/common/rabbitmq.py`
+- **Trạng thái:** Đã xử lý (Branch `fix/p0-security-performance`).
+- **Giải pháp đã triển khai:**
+  - Tái sử dụng channel dùng chung qua `get_publish_channel()`, loại bỏ thao tác open/close channel liên tục trên mỗi message.
+  - Cache tập hợp `_declared_queues` trong memory để chỉ khai báo queue 1 lần duy nhất lúc khởi động service.
+  - `publish_message` phát hành trực tiếp qua `channel.default_exchange.publish` với chế độ persistent delivery.
 
 ---
 
-## 14. [CRITICAL] Độ tin cậy & Dữ liệu: Alerter Lock Contention làm nuốt mất Alert Event vĩnh viễn
-- **Vị trí:** `services/alerter/state_machine.py` (L60-67), `services/alerter/main.py` (L20-24)
-- **Mức độ nghiêm trọng:** **CRITICAL** (Mất mát dữ liệu cảnh báo sự cố).
-- **Vấn đề:** Khi hai sự kiện kiểm tra của cùng một monitor về gần nhau, nếu distributed lock `lock:alert:{id}` bận, hàm chỉ thử lại 1 lần sau 0.5s rồi `return` bỏ qua. Kết hợp với việc RabbitMQ consumer chạy `message.process(requeue=False)`, tin nhắn cảnh báo bị drop hoàn toàn và không bao giờ được xử lý lại.
-- **Rủi ro:** Sự cố DOWN hoặc RECOVERY thực tế bị bỏ sót, người dùng không nhận được thông báo dịch vụ chết.
-- **Giai đoạn sửa chữa:** **TRƯỚC GIAI ĐOẠN TIẾP THEO (Trước P3)** — Trực tiếp ảnh hưởng tới tính đúng đắn của tính năng cảnh báo.
-- **Giải pháp:** Khi không lấy được lock, reject message về RabbitMQ với `requeue=True` hoặc tăng retry backoff trước khi ack.
+## 14. [ĐÃ XỬ LÝ] Độ tin cậy & Dữ liệu: Alerter Lock Contention làm nuốt mất Alert Event vĩnh viễn
+- **Vị trí:** `services/alerter/state_machine.py`, `services/alerter/main.py`
+- **Trạng thái:** Đã xử lý (Branch `fix/p0-security-performance`).
+- **Giải pháp đã triển khai:**
+  - Tăng số lần thử lấy distributed lock lên 4 lần trong `handle_alert_event`, ném `TimeoutError` nếu không thành công sau backoff.
+  - Alerter consumer bọc trong `message.process(requeue=True)` để tự động reject và đẩy lại message vào hàng đợi RabbitMQ thay vì nuốt mất message.
 
 ---
 
@@ -159,13 +153,12 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 16. [HIGH] Độ ổn định: Race Condition khi Register User gây 500 Unhandled IntegrityError
-- **Vị trí:** `services/api_gateway/routers/auth.py` (`register`, L21-38)
-- **Mức độ nghiêm trọng:** **HIGH** (Lỗi dịch vụ 500 phát sinh ra ngoài).
-- **Vấn đề:** Endpoint kiểm tra sự tồn tại của email qua `select` trước khi insert. Hai request đồng thời với cùng email sẽ cùng vượt qua bước check, sau đó lệnh `db.commit()` thứ hai ném ra `IntegrityError` từ SQLAlchemy (vi phạm unique constraint) nhưng không được catch, gây HTTP 500 Internal Server Error.
-- **Rủi ro:** Gây sai lệch metric lỗi hệ thống 500 và trải nghiệm người dùng kém.
-- **Giai đoạn sửa chữa:** **TRƯỚC GIAI ĐOẠN TIẾP THEO (Trước P3)**.
-- **Giải pháp:** Bọc `await db.commit()` trong `try...except IntegrityError` và raise `HTTPException(status_code=400, detail="Email đã được đăng ký")`.
+## 16. [ĐÃ XỬ LÝ] Độ ổn định: Race Condition khi Register User gây 500 Unhandled IntegrityError
+- **Vị trí:** `services/api_gateway/routers/auth.py`
+- **Trạng thái:** Đã xử lý (Branch `staging`).
+- **Giải pháp đã triển khai:**
+  - Bọc khối `await db.commit()` trong `try...except IntegrityError`, tự động `await db.rollback()`.
+  - Ném `HTTPException(status_code=400, detail="Email đã được đăng ký")` an toàn, ngăn chặn phát sinh lỗi HTTP 500 unhandled.
 
 ---
 

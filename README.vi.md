@@ -65,7 +65,7 @@ Nền tảng mã nguồn mở tự vận hành (self-hosted), chịu lỗi cao, 
    - Background cron tổng hợp định kỳ hàng giờ vào bảng `hourly_uptime_summary` để vẽ biểu đồ 30 ngày siêu nhẹ, tránh phình cơ sở dữ liệu PostgreSQL.
 5. **Observability Chuẩn SRE:**
    - Xuất telemetry theo chuẩn RED (Rate, Errors, Duration) cho Prometheus và bảng điều khiển Grafana.
-   - Đo lường chịu tải bằng k6 với năng lực xử lý >2,000 checks/giây.
+   - Mục tiêu chịu tải thiết kế >2,000 checks/giây (số đo baseline đơn node hiện tại: ~200 RPS qua k6).
 
 ---
 
@@ -101,7 +101,7 @@ uptime-guardian/
 
 ## Tóm Tắt Lộ Trình Triển Khai
 
-- **Milestone 1 (v0.1.0): Lõi Phân Tán (Đã Hoàn Thành)** — Database schema, FastAPI Gateway, atomic Redis ZSET scheduler, idempotent checker, alert state machine, và dashboard realtime.
+- **Milestone 1 (v0.1.0): Lõi Phân Tán (Đã Hoàn Thành)** — Database schema, FastAPI Gateway, atomic Redis ZSET scheduler, idempotent checker, alert state machine, và dashboard giao diện polling (live WebSocket telemetry nằm trong kế hoạch v0.3.0).
 - **Milestone 2 (v0.2.0): Vận Hành Production & SRE Observability (Đang Triển Khai)** — Terraform IaC, reverse proxy TLS tự động, Prometheus/Grafana RED metrics, GitHub Actions CI/CD, React Tailwind dashboard, và k6 load test.
 - **Milestone 3 (v0.3.0): Mở Rộng Cụm Phân Tán (Kế Hoạch)** — k3s orchestration, HPA auto-scaling theo độ dài hàng đợi RabbitMQ, multi-region quorum check, và live WebSocket telemetry.
 

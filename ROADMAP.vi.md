@@ -43,8 +43,8 @@
   - Khóa phân tán (`SETNX`) chống race condition cảnh báo giữa các worker node.
   - Tích hợp Telegram Bot gửi cảnh báo sự cố và tự động gửi tin thông báo khi dịch vụ phục hồi (Recovery).
 - [x] **Giao Diện & Kiểm Thử Tự Động:**
-  - Dashboard quản lý real-time phong cách dark-mode.
-  - Bộ test suite tự động đạt 22/22 unit và integration tests pass.
+  - Dashboard quản lý phong cách dark-mode (HTTP polling; live WebSockets trong v0.3.0).
+  - Bộ test suite tự động đạt 117/117 unit và integration tests pass.
 
 ---
 

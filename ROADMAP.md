@@ -43,8 +43,8 @@
   - Distributed mutual exclusion lock (`SETNX`) preventing alert race conditions across worker nodes.
   - Telegram Bot notification dispatcher with automatic recovery signaling.
 - [x] **Dashboard & Verification:**
-  - Real-time dark-mode operational dashboard.
-  - Automated test suite with 22/22 unit and integration tests passing.
+  - Dark-mode operational dashboard (HTTP polling; live WebSockets in v0.3.0).
+  - Automated test suite with 117/117 unit and integration tests passing.
 
 ---
 
