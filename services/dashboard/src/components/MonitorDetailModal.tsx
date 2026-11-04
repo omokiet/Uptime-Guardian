@@ -14,6 +14,7 @@ export const MonitorDetailModal: React.FC<MonitorDetailModalProps> = ({ monitor,
   const [detail, setDetail] = useState<MonitorDetail | null>(null);
   const [history, setHistory] = useState<CheckResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState<number>(10000);
 
   const fetchDetail = () => {
     if (!monitor) return;
@@ -32,7 +33,12 @@ export const MonitorDetailModal: React.FC<MonitorDetailModalProps> = ({ monitor,
 
   useEffect(() => {
     fetchDetail();
-  }, [monitor]);
+    if (refreshInterval <= 0) return;
+    const timer = setInterval(() => {
+      fetchDetail();
+    }, refreshInterval);
+    return () => clearInterval(timer);
+  }, [monitor, refreshInterval]);
 
   if (!monitor) return null;
 
@@ -58,10 +64,25 @@ export const MonitorDetailModal: React.FC<MonitorDetailModalProps> = ({ monitor,
           </div>
 
           <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 bg-brand-bg/80 border border-brand-border rounded-md px-2 py-1 text-xs">
+              <span className="text-zinc-500 font-mono text-[11px]">Auto:</span>
+              <select
+                value={refreshInterval}
+                onChange={(e) => setRefreshInterval(Number(e.target.value))}
+                className="bg-transparent text-zinc-300 hover:text-white focus:outline-none cursor-pointer text-xs font-mono"
+              >
+                <option value={0} className="bg-brand-surface text-zinc-300">Off</option>
+                <option value={5000} className="bg-brand-surface text-zinc-300">5s</option>
+                <option value={10000} className="bg-brand-surface text-zinc-300">10s</option>
+                <option value={30000} className="bg-brand-surface text-zinc-300">30s</option>
+                <option value={60000} className="bg-brand-surface text-zinc-300">1m</option>
+              </select>
+            </div>
+
             <button
               onClick={fetchDetail}
               className="p-1.5 rounded-md text-zinc-400 hover:text-white hover:bg-brand-subtle transition-all active:scale-95"
-              title="Refresh"
+              title="Refresh now"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             </button>
@@ -77,20 +98,36 @@ export const MonitorDetailModal: React.FC<MonitorDetailModalProps> = ({ monitor,
         {/* Content Body */}
         <div className="overflow-y-auto space-y-5 pr-1 text-xs">
           {/* Summary Chips */}
-          <div className="grid grid-cols-3 gap-2.5">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
             <div className="p-3 bg-brand-bg border border-brand-border rounded-lg">
-              <span className="text-[11px] text-zinc-400 font-mono">Interval</span>
-              <p className="text-sm font-semibold font-mono text-white mt-1">
-                {detail?.interval_seconds ?? monitor.interval_seconds}s
+              <span className="text-[11px] text-zinc-400 font-mono">24h Uptime</span>
+              <p className="text-sm font-semibold font-mono text-emerald-400 mt-1">
+                {detail?.uptime_percentage_24h !== undefined && detail?.uptime_percentage_24h !== null
+                  ? `${detail.uptime_percentage_24h}%`
+                  : '—'}
               </p>
             </div>
 
             <div className="p-3 bg-brand-bg border border-brand-border rounded-lg">
-              <span className="text-[11px] text-zinc-400 font-mono">SSL Certificate</span>
+              <span className="text-[11px] text-zinc-400 font-mono">24h Avg RTT</span>
+              <p className="text-sm font-semibold font-mono text-white mt-1">
+                {detail?.avg_response_time_24h ? `${detail.avg_response_time_24h}ms` : '—'}
+              </p>
+            </div>
+
+            <div className="p-3 bg-brand-bg border border-brand-border rounded-lg">
+              <span className="text-[11px] text-zinc-400 font-mono">SSL Cert</span>
               <p className="text-sm font-semibold font-mono text-white mt-1">
                 {history[0]?.ssl_days_remaining !== null && history[0]?.ssl_days_remaining !== undefined
-                  ? `${history[0].ssl_days_remaining} days left`
+                  ? `${history[0].ssl_days_remaining}d`
                   : '—'}
+              </p>
+            </div>
+
+            <div className="p-3 bg-brand-bg border border-brand-border rounded-lg">
+              <span className="text-[11px] text-zinc-400 font-mono">Interval</span>
+              <p className="text-sm font-semibold font-mono text-white mt-1">
+                {detail?.interval_seconds ?? monitor.interval_seconds}s
               </p>
             </div>
 
@@ -104,7 +141,14 @@ export const MonitorDetailModal: React.FC<MonitorDetailModalProps> = ({ monitor,
 
           {/* Latency Section */}
           <div>
-            <span className="block font-medium text-zinc-300 mb-2">Response Latency (RTT)</span>
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-medium text-zinc-300">Response Latency (RTT)</span>
+              {refreshInterval > 0 && (
+                <span className="text-[10px] text-zinc-500 font-mono">
+                  Auto-refreshing every {refreshInterval / 1000}s
+                </span>
+              )}
+            </div>
             <LatencyChart checks={history} />
           </div>
 

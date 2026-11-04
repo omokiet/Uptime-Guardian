@@ -57,6 +57,7 @@ async def check_ssl_days(
     timeout: float = 5.0,
     server_ip: Optional[str] = None,
 ) -> Optional[int]:
+    writer = None
     try:
         connect_target = server_ip or hostname
         context = ssl.create_default_context()
@@ -69,8 +70,6 @@ async def check_ssl_days(
             )
             ssl_object = writer.get_extra_info("ssl_object")
             cert = ssl_object.getpeercert() if ssl_object else None
-            writer.close()
-            await writer.wait_closed()
 
         if cert and "notAfter" in cert:
             expire_date = datetime.datetime.strptime(
@@ -81,6 +80,13 @@ async def check_ssl_days(
             return max(0, delta.days)
     except Exception:
         return None
+    finally:
+        if writer is not None:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
     return None
 
 
@@ -206,61 +212,69 @@ async def process_check_job(payload: dict) -> bool:
         return False
 
     redis_client = get_redis_client()
-    # Idempotency lock in Redis with 300s TTL: if redelivery happens, skip re-executing
+    if await redis_client.exists(f"check:processed:{job_id_str}"):
+        return True
+
+    in_flight_lock = f"lock:check:{job_id_str}"
     is_acquired = await redis_client.set(
-        f"check:processed:{job_id_str}",
+        in_flight_lock,
         "1",
-        ex=300,
+        ex=30,
         nx=True,
     )
     if not is_acquired:
         return True
 
-    is_success, status_code, latency_ms, error_msg, ssl_days = await execute_check(
-        job_id=job_id_str,
-        monitor_id=monitor_id_str,
-        url=url,
-        method=method,
-        timeout_seconds=timeout_seconds,
-        expected_status_code=expected_status_code,
-    )
-
-    CHECKER_CHECKS_TOTAL.labels(
-        method=method,
-        status="success" if is_success else "failure",
-    ).inc()
-    if latency_ms is not None:
-        CHECKER_CHECK_DURATION_SECONDS.labels(method=method).observe(latency_ms / 1000.0)
-    if ssl_days is not None:
-        if ssl_days <= 7:
-            CHECKER_SSL_EXPIRING_TOTAL.labels(urgency="critical").inc()
-        elif ssl_days <= 30:
-            CHECKER_SSL_EXPIRING_TOTAL.labels(urgency="warning").inc()
-
-    m_uuid = uuid.UUID(monitor_id_str)
-    j_uuid = uuid.UUID(job_id_str)
-
-    async with AsyncSessionLocal() as session:
-        check_result = CheckResult(
-            monitor_id=m_uuid,
-            job_id=j_uuid,
-            status_code=status_code,
-            response_time_ms=latency_ms,
-            is_success=is_success,
-            error_message=error_msg,
-            ssl_days_remaining=ssl_days,
+    try:
+        is_success, status_code, latency_ms, error_msg, ssl_days = await execute_check(
+            job_id=job_id_str,
+            monitor_id=monitor_id_str,
+            url=url,
+            method=method,
+            timeout_seconds=timeout_seconds,
+            expected_status_code=expected_status_code,
         )
-        session.add(check_result)
-        await session.commit()
 
-    alert_event = {
-        "job_id": job_id_str,
-        "monitor_id": monitor_id_str,
-        "url": url,
-        "is_success": is_success,
-        "status_code": status_code,
-        "response_time_ms": latency_ms,
-        "error_message": error_msg,
-    }
-    await publish_message("alert.events", alert_event)
+        CHECKER_CHECKS_TOTAL.labels(
+            method=method,
+            status="success" if is_success else "failure",
+        ).inc()
+        if latency_ms is not None:
+            CHECKER_CHECK_DURATION_SECONDS.labels(method=method).observe(latency_ms / 1000.0)
+        if ssl_days is not None:
+            if ssl_days <= 7:
+                CHECKER_SSL_EXPIRING_TOTAL.labels(urgency="critical").inc()
+            elif ssl_days <= 30:
+                CHECKER_SSL_EXPIRING_TOTAL.labels(urgency="warning").inc()
+
+        m_uuid = uuid.UUID(monitor_id_str)
+        j_uuid = uuid.UUID(job_id_str)
+
+        async with AsyncSessionLocal() as session:
+            check_result = CheckResult(
+                monitor_id=m_uuid,
+                job_id=j_uuid,
+                status_code=status_code,
+                response_time_ms=latency_ms,
+                is_success=is_success,
+                error_message=error_msg,
+                ssl_days_remaining=ssl_days,
+            )
+            session.add(check_result)
+            await session.commit()
+
+        alert_event = {
+            "job_id": job_id_str,
+            "monitor_id": monitor_id_str,
+            "url": url,
+            "is_success": is_success,
+            "status_code": status_code,
+            "response_time_ms": latency_ms,
+            "error_message": error_msg,
+        }
+        await publish_message("alert.events", alert_event)
+        await redis_client.set(f"check:processed:{job_id_str}", "1", ex=300)
+    finally:
+        await redis_client.delete(in_flight_lock)
+
     return True

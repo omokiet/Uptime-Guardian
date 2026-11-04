@@ -1,7 +1,11 @@
+import datetime
+from decimal import Decimal
 import uuid
 from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+from services.common.models import HourlyUptimeSummary
 
 
 @pytest.mark.asyncio
@@ -213,3 +217,46 @@ async def test_list_monitors_pagination(async_client: AsyncClient, auth_headers:
         resp_offset_2 = await async_client.get("/api/v1/monitors?limit=2&offset=2", headers=auth_headers)
         assert resp_offset_2.status_code == 200
         assert len(resp_offset_2.json()) == 1
+
+
+@pytest.mark.asyncio
+async def test_monitor_detail_24h_sla_metrics(async_client: AsyncClient, auth_headers: dict, db_session: AsyncSession):
+    fake_addr_info = [(None, None, None, None, ("93.184.216.34", 80))]
+    mock_redis = AsyncMock()
+
+    with patch("socket.getaddrinfo", return_value=fake_addr_info), \
+         patch("services.api_gateway.routers.monitors.get_redis_client", return_value=mock_redis):
+
+        create_resp = await async_client.post(
+            "/api/v1/monitors",
+            json={"name": "SLA Monitor", "url": "https://sla.example.com"},
+            headers=auth_headers,
+        )
+        assert create_resp.status_code == 201
+        monitor_id = uuid.UUID(create_resp.json()["id"])
+
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        s1 = HourlyUptimeSummary(
+            monitor_id=monitor_id,
+            hour_timestamp=now_utc - datetime.timedelta(hours=1),
+            total_checks=10,
+            success_checks=10,
+            uptime_percentage=Decimal("100.00"),
+            avg_response_time_ms=100,
+        )
+        s2 = HourlyUptimeSummary(
+            monitor_id=monitor_id,
+            hour_timestamp=now_utc - datetime.timedelta(hours=2),
+            total_checks=10,
+            success_checks=8,
+            uptime_percentage=Decimal("80.00"),
+            avg_response_time_ms=200,
+        )
+        db_session.add_all([s1, s2])
+        await db_session.commit()
+
+        detail_resp = await async_client.get(f"/api/v1/monitors/{monitor_id}", headers=auth_headers)
+        assert detail_resp.status_code == 200
+        data = detail_resp.json()
+        assert float(data["uptime_percentage_24h"]) == 90.0
+        assert data["avg_response_time_24h"] == 150

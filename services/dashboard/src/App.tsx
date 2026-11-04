@@ -31,6 +31,7 @@ export const App: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'UP' | 'DOWN'>('ALL');
+  const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(10000);
 
   const fetchMonitors = useCallback(async () => {
     try {
@@ -77,13 +78,14 @@ export const App: React.FC = () => {
   }, [fetchUserData]);
 
   useEffect(() => {
+    if (autoRefreshInterval <= 0) return;
     const interval = setInterval(() => {
       if (!isAddOpen && !isAuthOpen) {
         fetchMonitors();
       }
-    }, 15000);
+    }, autoRefreshInterval);
     return () => clearInterval(interval);
-  }, [fetchMonitors, isAddOpen, isAuthOpen]);
+  }, [fetchMonitors, isAddOpen, isAuthOpen, autoRefreshInterval]);
 
   const handleLogout = () => {
     localStorage.removeItem('ug_token');
@@ -189,10 +191,26 @@ export const App: React.FC = () => {
 
           {/* Action Buttons (Uniform height h-9) */}
           <div className="flex items-center gap-2">
+            <div className="flex items-center h-9 bg-brand-surface border border-brand-border rounded-lg px-2.5 text-xs">
+              <span className="text-zinc-500 font-mono text-[11px] mr-1.5">Auto:</span>
+              <select
+                value={autoRefreshInterval}
+                onChange={(e) => setAutoRefreshInterval(Number(e.target.value))}
+                className="bg-transparent text-zinc-300 hover:text-white focus:outline-none cursor-pointer text-xs font-mono"
+              >
+                <option value={0} className="bg-brand-surface text-zinc-300">Off</option>
+                <option value={5000} className="bg-brand-surface text-zinc-300">5s</option>
+                <option value={10000} className="bg-brand-surface text-zinc-300">10s</option>
+                <option value={15000} className="bg-brand-surface text-zinc-300">15s</option>
+                <option value={30000} className="bg-brand-surface text-zinc-300">30s</option>
+                <option value={60000} className="bg-brand-surface text-zinc-300">1m</option>
+              </select>
+            </div>
+
             <button
               onClick={fetchMonitors}
               className="h-9 w-9 flex items-center justify-center rounded-lg bg-brand-surface hover:bg-brand-subtle text-zinc-400 hover:text-white border border-brand-border transition-all active:scale-95"
-              title="Refresh"
+              title="Refresh now"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             </button>

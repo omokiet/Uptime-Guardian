@@ -163,7 +163,13 @@ def test_auth_get_client_ip_headers():
 
         req_real = MagicMock()
         req_real.headers = {"X-Real-IP": "198.51.100.5"}
+        req_real.client.host = "127.0.0.1"
         assert get_client_ip(req_real) == "198.51.100.5"
+
+        req_spoofed = MagicMock()
+        req_spoofed.headers = {"X-Forwarded-For": "1.1.1.1"}
+        req_spoofed.client.host = "203.0.113.5"
+        assert get_client_ip(req_spoofed) == "203.0.113.5"
 
     req_client = MagicMock()
     req_client.headers = {}

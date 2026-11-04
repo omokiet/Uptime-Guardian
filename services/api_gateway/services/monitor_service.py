@@ -1,3 +1,4 @@
+from decimal import Decimal
 import logging
 import time
 import uuid
@@ -84,6 +85,26 @@ class MonitorService:
         recent_checks = await self.check_result_repo.get_recent_by_monitor_id(monitor.id, limit=20)
         detail = MonitorDetailResponse.model_validate(monitor)
         detail.recent_checks = [CheckResultResponse.model_validate(c) for c in recent_checks]
+
+        summaries = await self.hourly_summary_repo.get_by_monitor_id(monitor.id, hours=24)
+        if summaries:
+            total_checks = sum(s.total_checks for s in summaries)
+            successful_checks = sum(s.success_checks for s in summaries)
+            if total_checks > 0:
+                detail.uptime_percentage_24h = round(Decimal((successful_checks / total_checks) * 100), 2)
+            valid_rtt_items = [s for s in summaries if s.avg_response_time_ms is not None and s.total_checks > 0]
+            if valid_rtt_items:
+                weighted_sum = sum(s.avg_response_time_ms * s.total_checks for s in valid_rtt_items)
+                total_rtt_checks = sum(s.total_checks for s in valid_rtt_items)
+                if total_rtt_checks > 0:
+                    detail.avg_response_time_24h = int(round(weighted_sum / total_rtt_checks))
+        elif recent_checks:
+            success_count = sum(1 for c in recent_checks if c.is_success)
+            detail.uptime_percentage_24h = round(Decimal((success_count / len(recent_checks)) * 100), 2)
+            valid_rtts = [c.response_time_ms for c in recent_checks if c.response_time_ms is not None]
+            if valid_rtts:
+                detail.avg_response_time_24h = int(round(sum(valid_rtts) / len(valid_rtts)))
+
         return detail
 
     async def update_monitor(

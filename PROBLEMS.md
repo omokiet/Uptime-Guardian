@@ -143,13 +143,13 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 15. [HIGH] Bảo mật: Bypass Auth Rate Limiting bằng giả mạo Header IP `X-Forwarded-For`
-- **Vị trí:** `services/api_gateway/rate_limiter.py` (`get_client_ip`, L10-18)
-- **Mức độ nghiêm trọng:** **HIGH** (Lỗ hổng bảo mật Brute Force / Credential Stuffing).
-- **Vấn đề:** `get_client_ip` tin tưởng tuyệt đối `X-Forwarded-For` từ client gửi lên mà không kiểm tra request có đến từ reverse proxy tin cậy (như Caddy) hay không. Attacker chỉ cần ngẫu nhiên hóa header `X-Forwarded-For: <random_ip>` là vô hiệu hóa hoàn toàn cơ chế chặn brute force của `/login` và spam `/register`.
-- **Rủi ro:** Tấn công từ chối dịch vụ tài nguyên auth hoặc vét cạn mật khẩu người dùng.
-- **Giai đoạn sửa chữa:** **TRƯỚC GIAI ĐOẠN TIẾP THEO (Trước P3)**.
-- **Giải pháp:** Chỉ đọc `X-Forwarded-For` khi cấu hình bật tin cậy proxy (ví dụ kiểm tra client host có thuộc subnet Docker nội bộ), nếu không thì fallback về `request.client.host`.
+## 15. [ĐÃ XỬ LÝ] Bảo mật: Bypass Auth Rate Limiting bằng giả mạo Header IP `X-Forwarded-For`
+- **Vị trí:** `services/api_gateway/rate_limiter.py` (`get_client_ip`)
+- **Trạng thái:** Đã xử lý (Branch `fix/remaining-problems-and-ui`).
+- **Giải pháp đã triển khai:**
+  - Định nghĩa dải CIDR tin cậy `TRUSTED_PROXIES` ở cấp module (`127.0.0.0/8`, `::1/128`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).
+  - Hàm `get_client_ip` chỉ tin tưởng và bóc tách IP từ `X-Forwarded-For` / `X-Real-IP` khi `settings.TRUST_PROXY=True` VÀ IP kết nối trực tiếp (`request.client.host`) thuộc danh sách trusted reverse proxy.
+  - Xác thực cú pháp IP qua `ipaddress.ip_address` để triệt tiêu injection vào Redis keys, fallback an toàn về `request.client.host`.
 
 ---
 
@@ -172,31 +172,40 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 18. [MEDIUM] Độ tin cậy: Idempotency Lock đặt trước khiến Check Job bị bỏ rơi khi Worker Crash
-- **Vị trí:** `services/checker/checker.py` (`process_check_job`, L208-217)
-- **Mức độ nghiêm trọng:** **MEDIUM** (Mất dữ liệu kiểm tra cục bộ).
-- **Vấn đề:** Khóa `check:processed:{job_id}` được set NX vào Redis với TTL 300s trước khi thực hiện check HTTP và ghi DB. Nếu worker bị crash/kill giữa chừng (OOM, restart), RabbitMQ gửi lại message nhưng worker mới thấy key đã tồn tại nên bỏ qua luôn (`return True`).
-- **Rủi ro:** Mất mẫu kiểm tra của monitor trong chu kỳ đó.
-- **Giai đoạn sửa chữa:** **SỬA Ở SESSION FIX** (Hoãn lại, giải quyết tập trung trong session fix/refactor sau).
-- **Giải pháp:** Ghi nhận idempotency sau khi commit DB thành công hoặc tận dụng DB constraint/UPSERT.
+## 18. [ĐÃ XỬ LÝ] Độ tin cậy: Idempotency Lock đặt trước khiến Check Job bị bỏ rơi khi Worker Crash
+- **Vị trí:** `services/checker/checker.py` (`process_check_job`)
+- **Trạng thái:** Đã xử lý (Branch `fix/remaining-problems-and-ui`).
+- **Giải pháp đã triển khai:**
+  - Áp dụng mô hình khóa 2 pha (Two-phase idempotency lease):
+    1. Pha in-flight: Đặt khóa ngắn hạn `lock:check:{job_id}` (TTL 30s) bằng `SET NX`. Nếu worker crash giữa chừng, sau 30s khóa tự hết hạn để RabbitMQ redelivery có thể thực thi lại.
+    2. Pha hoàn tất: Chỉ ghi nhận khóa idempotency dài hạn `check:processed:{job_id}` (TTL 300s) sau khi DB transaction commit và alert event publish thành công.
+  - Giải phóng `lock:check:{job_id}` trong khối `finally`.
 
 ---
 
-## 19. [MEDIUM] Chức năng API: Thiếu chỉ số thống kê 24h trong `MonitorDetailResponse`
-- **Vị trí:** `services/api_gateway/services/monitor_service.py` (L84-87), `services/common/schemas.py` (L105-109)
-- **Mức độ nghiêm trọng:** **MEDIUM** (Thiếu sót dữ liệu hiển thị Frontend).
-- **Vấn đề:** DTO `MonitorDetailResponse` có 2 trường `uptime_percentage_24h` và `avg_response_time_24h`, nhưng `get_monitor_detail` chỉ lấy 20 check gần nhất và không gọi `hourly_summary_repo`, khiến 2 trường này luôn trả về `null`.
-- **Rủi ro:** Dashboard không hiển thị được tóm tắt SLA 24h của monitor.
-- **Giai đoạn sửa chữa:** **SỬA Ở SESSION FIX** (Hoãn lại, giải quyết tập trung trong session fix/refactor sau).
-- **Giải pháp:** Tích hợp `hourly_summary_repo.get_by_monitor_id(monitor.id, hours=24)` vào `get_monitor_detail` để tính trung bình gia quyền.
+## 19. [ĐÃ XỬ LÝ] Chức năng API: Thiếu chỉ số thống kê 24h trong `MonitorDetailResponse`
+- **Vị trí:** `services/api_gateway/services/monitor_service.py` (`get_monitor_detail`)
+- **Trạng thái:** Đã xử lý (Branch `fix/remaining-problems-and-ui`).
+- **Giải pháp đã triển khai:**
+  - Tích hợp `hourly_summary_repo.get_by_monitor_id(monitor.id, hours=24)` vào `get_monitor_detail`.
+  - Tính toán tỷ lệ `uptime_percentage_24h` và độ trễ phản hồi trung bình gia quyền `avg_response_time_24h` theo số lượng checks từng giờ.
+  - Bổ sung fallback tự động tính toán từ `recent_checks` cho monitor mới tạo trong 1 giờ đầu tiên.
 
 ---
 
-## 20. [LOW] Tài nguyên hệ thống: Rò rỉ Socket File Descriptor trong `check_ssl_days` khi Timeout
-- **Vị trí:** `services/checker/checker.py` (`check_ssl_days`, L63-74)
-- **Mức độ nghiêm trọng:** **LOW** (Cảnh báo tài nguyên runtime).
-- **Vấn đề:** Lệnh `writer.close()` nằm trong `try` nhưng không được bọc trong `finally`. Khi `asyncio.timeout` kích hoạt sau khi `open_connection` đã mở socket, socket không được đóng chủ động.
-- **Rủi ro:** Gây `ResourceWarning: unclosed <socket.socket>` và rò rỉ nhẹ file descriptors.
-- **Giai đoạn sửa chữa:** **SỬA Ở SESSION FIX** (Hoãn lại, giải quyết tập trung trong session fix/refactor sau).
-- **Giải pháp:** Bọc việc giải phóng reader/writer trong khối `try...finally`.
+## 20. [ĐÃ XỬ LÝ] Tài nguyên hệ thống: Rò rỉ Socket File Descriptor trong `check_ssl_days` khi Timeout
+- **Vị trí:** `services/checker/checker.py` (`check_ssl_days`)
+- **Trạng thái:** Đã xử lý (Branch `fix/remaining-problems-and-ui`).
+- **Giải pháp đã triển khai:**
+  - Bọc việc đóng `writer.close()` và `await writer.wait_closed()` trong khối `finally` với `try...except Exception: pass`.
+  - Triệt tiêu hoàn toàn rò rỉ socket file descriptor và cảnh báo `ResourceWarning: unclosed <socket.socket>` khi handshake timeout.
+
+---
+
+## 21. [ĐÃ XỬ LÝ] Trải nghiệm người dùng (UX): Biểu đồ và danh sách Dashboard không tự refresh (Clunky tracking)
+- **Vị trí:** `services/dashboard/src/App.tsx`, `services/dashboard/src/components/MonitorDetailModal.tsx`
+- **Trạng thái:** Đã xử lý (Branch `fix/remaining-problems-and-ui`).
+- **Giải pháp đã triển khai:**
+  - Thêm bộ chọn Auto-Refresh kiểu Grafana (`Off`, `5s`, `10s`, `15s`, `30s`, `1m`) trên Toolbar của trang chủ Dashboard và Header của Monitor Detail Modal.
+  - Tự động gọi ngầm `fetchDetail()` và `fetchMonitors()` định kỳ mà không gây giật lag giao diện hay reset vị trí cuộn.
 
