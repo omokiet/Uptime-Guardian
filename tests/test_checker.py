@@ -27,15 +27,21 @@ async def test_checker_idempotency_prevents_duplicate_run(db_session: AsyncSessi
     }
 
     mock_redis = AsyncMock()
-    mock_redis.set = AsyncMock(return_value=None)
+    mock_redis.exists = AsyncMock(return_value=True)
+    with patch("services.checker.checker.get_redis_client", return_value=mock_redis):
+        result = await process_check_job(payload)
+        assert result is True
+        assert not mock_redis.set.called
 
+    mock_redis.exists = AsyncMock(return_value=False)
+    mock_redis.set = AsyncMock(return_value=None)
     with patch("services.checker.checker.get_redis_client", return_value=mock_redis):
         result = await process_check_job(payload)
         assert result is True
         mock_redis.set.assert_called_once_with(
-            f"check:processed:{job_id}",
+            f"lock:check:{job_id}",
             "1",
-            ex=300,
+            ex=30,
             nx=True,
         )
 
@@ -62,7 +68,9 @@ async def test_checker_executes_and_saves_result(db_session: AsyncSession, test_
     }
 
     mock_redis = AsyncMock()
+    mock_redis.exists = AsyncMock(return_value=False)
     mock_redis.set = AsyncMock(return_value=True)
+    mock_redis.delete = AsyncMock()
 
     fake_response = httpx.Response(status_code=200, request=httpx.Request("GET", monitor.url))
     fake_addr = [(None, None, None, None, ("93.184.216.34", 80))]
@@ -85,6 +93,8 @@ async def test_checker_executes_and_saves_result(db_session: AsyncSession, test_
         assert record.is_success is True
         assert record.status_code == 200
         assert record.ssl_days_remaining == 90
+        mock_redis.set.assert_any_call(f"check:processed:{job_id}", "1", ex=300)
+        mock_redis.delete.assert_called_once_with(f"lock:check:{job_id}")
 
 
 @pytest.mark.asyncio
@@ -114,6 +124,14 @@ async def test_check_ssl_days_scenarios():
     with patch("asyncio.open_connection", new_callable=AsyncMock, side_effect=conn_err):
         days_err = await check_ssl_days("error.example.com")
         assert days_err is None
+
+    mock_writer.reset_mock()
+    with patch("asyncio.open_connection", new_callable=AsyncMock, return_value=(AsyncMock(), mock_writer)), \
+         patch.object(mock_ssl_obj, "getpeercert", side_effect=TimeoutError("handshake timeout")):
+        days_timeout = await check_ssl_days("timeout.example.com")
+        assert days_timeout is None
+        assert mock_writer.close.called
+        assert mock_writer.wait_closed.called
 
 
 @pytest.mark.asyncio

@@ -174,6 +174,7 @@ async def test_monitor_service_lifecycle_and_error_handling():
         )
         service.monitor_repo.get_by_id_and_user = AsyncMock(return_value=existing_monitor)
         service.check_result_repo.get_recent_by_monitor_id = AsyncMock(return_value=[])
+        service.hourly_summary_repo.get_by_monitor_id = AsyncMock(return_value=[])
 
         detail = await service.get_monitor_detail(current_user=user, monitor_id=existing_monitor.id)
         assert detail.name == "Existing"
