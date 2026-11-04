@@ -171,6 +171,24 @@ def test_auth_get_client_ip_headers():
         req_spoofed.client.host = "203.0.113.5"
         assert get_client_ip(req_spoofed) == "203.0.113.5"
 
+        # Case 4: Malformed IP in X-Forwarded-For falls back to direct IP
+        req_malformed_ff = MagicMock()
+        req_malformed_ff.headers = {"X-Forwarded-For": "invalid_ip_format"}
+        req_malformed_ff.client.host = "127.0.0.1"
+        assert get_client_ip(req_malformed_ff) == "127.0.0.1"
+
+        # Case 5: Malformed IP in X-Real-IP falls back to direct IP
+        req_malformed_real = MagicMock()
+        req_malformed_real.headers = {"X-Real-IP": "bad_real_ip"}
+        req_malformed_real.client.host = "127.0.0.1"
+        assert get_client_ip(req_malformed_real) == "127.0.0.1"
+
+        # Case 6: Invalid host string in request.client.host
+        req_invalid_host = MagicMock()
+        req_invalid_host.headers = {"X-Forwarded-For": "1.1.1.1"}
+        req_invalid_host.client.host = "unresolvable-domain"
+        assert get_client_ip(req_invalid_host) == "unresolvable-domain"
+
     req_client = MagicMock()
     req_client.headers = {}
     req_client.client.host = "127.0.0.1"

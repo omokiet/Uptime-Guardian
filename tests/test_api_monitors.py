@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-from services.common.models import HourlyUptimeSummary
+from services.common.models import CheckResult, HourlyUptimeSummary
 
 
 @pytest.mark.asyncio
@@ -260,3 +260,54 @@ async def test_monitor_detail_24h_sla_metrics(async_client: AsyncClient, auth_he
         data = detail_resp.json()
         assert float(data["uptime_percentage_24h"]) == 90.0
         assert data["avg_response_time_24h"] == 150
+
+
+@pytest.mark.asyncio
+async def test_monitor_detail_fallback_to_recent_checks(
+    async_client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+):
+    fake_addr_info = [(None, None, None, None, ("93.184.216.34", 80))]
+    mock_redis = AsyncMock()
+
+    with patch("socket.getaddrinfo", return_value=fake_addr_info), \
+         patch("services.api_gateway.routers.monitors.get_redis_client", return_value=mock_redis):
+
+        create_resp = await async_client.post(
+            "/api/v1/monitors",
+            json={"name": "Fallback Monitor", "url": "https://fallback.example.com"},
+            headers=auth_headers,
+        )
+        assert create_resp.status_code == 201
+        monitor_id = uuid.UUID(create_resp.json()["id"])
+
+        c1 = CheckResult(
+            monitor_id=monitor_id,
+            job_id=uuid.uuid4(),
+            status_code=200,
+            response_time_ms=100,
+            is_success=True,
+        )
+        c2 = CheckResult(
+            monitor_id=monitor_id,
+            job_id=uuid.uuid4(),
+            status_code=200,
+            response_time_ms=120,
+            is_success=True,
+        )
+        c3 = CheckResult(
+            monitor_id=monitor_id,
+            job_id=uuid.uuid4(),
+            status_code=500,
+            response_time_ms=200,
+            is_success=False,
+        )
+        db_session.add_all([c1, c2, c3])
+        await db_session.commit()
+
+        detail_resp = await async_client.get(f"/api/v1/monitors/{monitor_id}", headers=auth_headers)
+        assert detail_resp.status_code == 200
+        data = detail_resp.json()
+        assert float(data["uptime_percentage_24h"]) == 66.67
+        assert data["avg_response_time_24h"] == 140

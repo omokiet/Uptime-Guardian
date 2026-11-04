@@ -98,6 +98,77 @@ async def test_checker_executes_and_saves_result(db_session: AsyncSession, test_
 
 
 @pytest.mark.asyncio
+async def test_checker_crash_releases_lock_and_allows_redelivery(db_session: AsyncSession, test_user: User):
+    monitor = Monitor(
+        user_id=test_user.id,
+        name="Crash Test Server",
+        url="https://crash.example.com",
+        interval_seconds=60,
+        expected_status_code=200,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    job_id = str(uuid.uuid4())
+    payload = {
+        "job_id": job_id,
+        "monitor_id": str(monitor.id),
+        "url": monitor.url,
+        "expected_status_code": 200,
+    }
+
+    processed_keys = set()
+    in_flight_locks = set()
+
+    async def mock_exists(key):
+        return key in processed_keys
+
+    async def mock_set(key, val, ex=None, nx=False):
+        if nx and key in in_flight_locks:
+            return None
+        if key.startswith("lock:check:"):
+            in_flight_locks.add(key)
+        if key.startswith("check:processed:"):
+            processed_keys.add(key)
+        return True
+
+    async def mock_delete(key):
+        in_flight_locks.discard(key)
+
+    mock_redis = AsyncMock()
+    mock_redis.exists.side_effect = mock_exists
+    mock_redis.set.side_effect = mock_set
+    mock_redis.delete.side_effect = mock_delete
+
+    # Attempt 1: Worker crashes during execution
+    with patch("services.checker.checker.get_redis_client", return_value=mock_redis), \
+         patch("services.checker.checker.execute_check", side_effect=RuntimeError("Worker OOM Killed")):
+        with pytest.raises(RuntimeError) as exc_info:
+            await process_check_job(payload)
+        assert "Worker OOM Killed" in str(exc_info.value)
+        # Lock must be released in finally, and processed key must NOT be set
+        assert f"lock:check:{job_id}" not in in_flight_locks
+        assert f"check:processed:{job_id}" not in processed_keys
+
+    # Attempt 2: RabbitMQ redelivers message to surviving worker -> Succeeds
+    fake_response = httpx.Response(status_code=200, request=httpx.Request("GET", monitor.url))
+    fake_addr = [(None, None, None, None, ("93.184.216.34", 80))]
+
+    with patch("services.checker.checker.get_redis_client", return_value=mock_redis), \
+         patch("services.checker.checker.AsyncSessionLocal", return_value=db_session), \
+         patch("services.checker.checker.publish_message", new_callable=AsyncMock), \
+         patch("socket.getaddrinfo", return_value=fake_addr), \
+         patch("httpx.AsyncClient.request", return_value=fake_response), \
+         patch("services.checker.checker.check_ssl_days", return_value=30):
+
+        success = await process_check_job(payload)
+        assert success is True
+        # Now processed key must be set
+        assert f"check:processed:{job_id}" in processed_keys
+
+
+@pytest.mark.asyncio
 async def test_check_ssl_days_scenarios():
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     future_date_str = (now_utc + datetime.timedelta(days=45)).strftime("%b %d %H:%M:%S %Y GMT")
