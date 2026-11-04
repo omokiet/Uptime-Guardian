@@ -15,6 +15,40 @@ jobs:
   backend-validation:
     name: Backend Lint, Security & Tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: uptime_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      rabbitmq:
+        image: rabbitmq:3-alpine
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -39,7 +73,20 @@ jobs:
         run: |
           bandit -r services/ -ll -ii -x services/dashboard
 
+      - name: Run Database Migrations (Alembic)
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@localhost:5432/uptime_test
+        run: |
+          alembic upgrade head
+
       - name: Run Test Suite (Pytest)
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@localhost:5432/uptime_test
+          SYNC_DATABASE_URL: postgresql+psycopg2://postgres:postgrespassword@localhost:5432/uptime_test
+          REDIS_URL: redis://localhost:6379/0
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672/
+          SECRET_KEY: test-ci-secret-key-minimum-32-chars-long
+          RUN_INTEGRATION_TESTS: "true"
         run: |
           pytest -v --cov=services
 
