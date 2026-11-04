@@ -93,8 +93,8 @@ uptime-guardian/
 │   └── dashboard/         # Giao diện dashboard React + Vite + Tailwind CSS
 ├── docker/                # Docker Compose cho dev và production
 ├── tests/                 # Integration tests, unit tests, và benchmark k6
-├── ROADMAP.vi.md          # Lộ trình kỹ thuật 3 mốc release
-└── SPEC.vi.md             # Tài liệu đặc tả kiến trúc & kỹ thuật chi tiết
+├── docs/                  # Tài liệu đặc tả kỹ thuật, roadmap, debt tracking & hướng dẫn
+└── AGENTS.md              # Quy chuẩn cộng tác và trạm kiểm soát AI Agent
 ```
 
 ---
@@ -105,4 +105,4 @@ uptime-guardian/
 - **Milestone 2 (v0.2.0): Vận Hành Production & SRE Observability (Đang Triển Khai)** — Terraform IaC, reverse proxy TLS tự động, Prometheus/Grafana RED metrics, GitHub Actions CI/CD, React Tailwind dashboard, và k6 load test.
 - **Milestone 3 (v0.3.0): Mở Rộng Cụm Phân Tán (Kế Hoạch)** — k3s orchestration, HPA auto-scaling theo độ dài hàng đợi RabbitMQ, multi-region quorum check, và live WebSocket telemetry.
 
-Chi tiết kỹ thuật: Xem [ROADMAP.vi.md](./ROADMAP.vi.md) và [SPEC.vi.md](./SPEC.vi.md).
+Chi tiết kỹ thuật: Xem [ROADMAP.vi.md](docs/ROADMAP.vi.md) và [SPEC.vi.md](docs/SPEC.vi.md).

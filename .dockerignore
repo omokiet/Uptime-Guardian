@@ -1,0 +1,45 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Python environments & bytecode caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Tests & Load benchmarks
+tests/
+
+# Frontend dashboard artifacts (built separately via services/dashboard/Dockerfile)
+services/dashboard/node_modules/
+services/dashboard/dist/
+services/dashboard/src/
+services/dashboard/public/
+services/dashboard/index.html
+services/dashboard/package*.json
+services/dashboard/tsconfig*.json
+services/dashboard/vite.config.ts
+services/dashboard/tailwind.config.js
+services/dashboard/postcss.config.js
+
+# Documentation & Specs
+docs/
+*.md
+
+# Local configurations & logs
+.env
+.env.local
+*.log
+.vscode/
+.idea/
+CV.code-workspace
+

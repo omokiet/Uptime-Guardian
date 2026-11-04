@@ -92,8 +92,8 @@ uptime-guardian/
 │   └── dashboard/         # React + Vite + Tailwind CSS monitoring dashboard
 ├── docker/                # Local development & production Docker Compose configs
 ├── tests/                 # Integration tests, unit tests, and k6 benchmark scripts
-├── ROADMAP.md             # Engineering release roadmap (Milestones 1–3)
-└── SPEC.md                # System Architecture & Technical Specification RFC
+├── docs/                  # Architecture specs, roadmaps, debt tracking, & guides
+└── AGENTS.md              # AI agent guidelines & workflow rules
 ```
 
 ---
@@ -104,4 +104,4 @@ uptime-guardian/
 - **Milestone 2 (v0.2.0): Production Hardening & SRE Observability (In Progress)** — Terraform IaC, production TLS proxy, Prometheus/Grafana RED metrics, GitHub Actions CI/CD, and k6 load benchmarks.
 - **Milestone 3 (v0.3.0): Distributed Resilience & Scaling (Planned)** — k3s orchestration, queue-driven HPA auto-scaling, multi-region quorum validation, and live WebSocket telemetry.
 
-For full technical details, refer to [ROADMAP.md](./ROADMAP.md) and [SPEC.md](./SPEC.md).
+For full technical details, refer to [ROADMAP.md](docs/ROADMAP.md) and [SPEC.md](docs/SPEC.md).
