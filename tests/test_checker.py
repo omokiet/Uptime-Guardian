@@ -12,7 +12,7 @@ from services.checker.checker import (
     get_httpx_client,
     process_check_job,
 )
-from services.checker.main import main as checker_main
+from services.checker.main import main as checker_main, run_checker_worker
 from services.common.models import CheckResult, Monitor, User
 
 
@@ -401,11 +401,15 @@ async def test_httpx_client_lifecycle():
 
 @pytest.mark.asyncio
 async def test_checker_worker_and_main():
+    processed_requeue_flags = []
+
     class DummyMessage:
         def __init__(self, body: bytes):
             self.body = body
 
         def process(self, requeue: bool = False):
+            processed_requeue_flags.append(requeue)
+
             class _Ctx:
                 async def __aenter__(s):
                     return None
@@ -445,9 +449,66 @@ async def test_checker_worker_and_main():
 
     with patch("services.checker.main.get_rabbitmq_connection", return_value=mock_conn), \
          patch("services.checker.main.process_check_job", new_callable=AsyncMock) as mock_process, \
+         patch("services.checker.main.start_metrics_server") as mock_metrics_srv, \
          patch("services.checker.main.close_httpx_client", new_callable=AsyncMock), \
          patch("services.checker.main.close_redis", new_callable=AsyncMock), \
          patch("services.checker.main.close_rabbitmq", new_callable=AsyncMock):
 
         await checker_main()
         assert mock_process.called
+        assert mock_metrics_srv.called
+        # Valid message must use requeue=True; poison JSON message must drop with requeue=False
+        assert processed_requeue_flags == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_checker_worker_requeues_on_transient_failure():
+    requeue_flags = []
+
+    class DummyMessage:
+        def __init__(self, body: bytes):
+            self.body = body
+
+        def process(self, requeue: bool = False):
+            requeue_flags.append(requeue)
+
+            class _Ctx:
+                async def __aenter__(s):
+                    return None
+
+                async def __aexit__(s, exc_type, exc_val, exc_tb):
+                    # Suppress exception inside test context so generator can proceed
+                    return True
+
+            return _Ctx()
+
+    class DummyQueue:
+        def iterator(self):
+            class _Iter:
+                async def __aenter__(s):
+                    return s
+
+                async def __aexit__(s, *args):
+                    return None
+
+                def __aiter__(s):
+                    s._items = [DummyMessage(b'{"job_id": "transient-fail"}')]
+                    return s
+
+                async def __anext__(s):
+                    if s._items:
+                        return s._items.pop(0)
+                    raise StopAsyncIteration
+
+            return _Iter()
+
+    mock_channel = AsyncMock()
+    mock_channel.declare_queue.return_value = DummyQueue()
+    mock_conn = AsyncMock()
+    mock_conn.channel.return_value = mock_channel
+
+    with patch("services.checker.main.get_rabbitmq_connection", return_value=mock_conn), \
+         patch("services.checker.main.process_check_job", side_effect=RuntimeError("PostgreSQL connection lost")):
+        await run_checker_worker()
+        # Message must be rejected with requeue=True so RabbitMQ redelivers
+        assert requeue_flags == [True]

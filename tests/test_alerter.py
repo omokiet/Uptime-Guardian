@@ -12,7 +12,12 @@ from services.alerter.notifiers import (
     get_notifier,
     send_notification,
 )
-from services.alerter.state_machine import handle_alert_event, notify_channels, send_telegram_alert
+from services.alerter.state_machine import (
+    LUA_SAFE_UNLOCK,
+    handle_alert_event,
+    notify_channels,
+    send_telegram_alert,
+)
 from services.common.config import settings
 from services.common.models import AlertConfig, Monitor, User
 
@@ -49,6 +54,7 @@ async def test_alerter_state_machine_transitions(db_session: AsyncSession, test_
     mock_redis = AsyncMock()
     mock_redis.set = AsyncMock(return_value=True)
     mock_redis.delete = AsyncMock()
+    mock_redis.eval = AsyncMock()
     mock_redis.hgetall = AsyncMock(side_effect=fake_hgetall)
     mock_redis.hset = AsyncMock(side_effect=fake_hset)
 
@@ -133,6 +139,45 @@ async def test_handle_alert_event_edge_cases():
          patch("asyncio.sleep", new_callable=AsyncMock):
         with pytest.raises(TimeoutError, match="Could not acquire alert lock"):
             await handle_alert_event({"monitor_id": str(uuid.uuid4())})
+
+
+@pytest.mark.asyncio
+async def test_alerter_lock_owner_token_safe_release(db_session: AsyncSession):
+    m_id = str(uuid.uuid4())
+    mock_redis = AsyncMock()
+    captured_tokens = []
+
+    async def mock_set(key, token, ex=None, nx=None):
+        captured_tokens.append(token)
+        return True
+
+    mock_redis.set = AsyncMock(side_effect=mock_set)
+    mock_redis.eval = AsyncMock(return_value=1)
+    mock_redis.hgetall = AsyncMock(return_value={})
+    mock_redis.hset = AsyncMock()
+
+    with patch("services.alerter.state_machine.get_redis_client", return_value=mock_redis), \
+         patch("services.alerter.state_machine.AsyncSessionLocal", return_value=db_session):
+        await handle_alert_event({
+            "monitor_id": m_id,
+            "is_success": True,
+            "url": "https://test.com",
+        })
+
+    # Assert lock was acquired with a valid UUID4 token string (not "1")
+    assert len(captured_tokens) == 1
+    token = captured_tokens[0]
+    parsed_token = uuid.UUID(token)
+    assert str(parsed_token) == token
+    assert token != "1"
+
+    # Assert safe atomic Lua release was called with that exact token
+    mock_redis.eval.assert_called_once_with(
+        LUA_SAFE_UNLOCK,
+        1,
+        f"lock:alert:{m_id}",
+        token,
+    )
 
 
 @pytest.mark.asyncio

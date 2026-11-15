@@ -26,6 +26,10 @@ Toàn bộ tài liệu kỹ thuật được gom gọn trong thư mục `docs/`:
 4. **Kiểm Soát Nhập/Xuất Dependencies**:
    - `requirements.txt`: Chỉ chứa runtime dependencies cho Production containers.
    - `requirements-dev.txt`: Chứa test runners, linters, SAST tools cho CI/Local dev.
+5. **Quy Chuẩn Kiểm Thử Khách Quan (Neutral & Unbiased Tests)**:
+   - Sau mỗi lần sửa bug: Bắt buộc bổ sung test mới (nếu là bug mới) hoặc sửa đổi/siết chặt test cũ (nếu test cũ lỏng lẻo để lọt bug).
+   - Test case phải trung lập, tuyệt đối không thiên vị code, không viết test chỉ để pass qua chuyện. Test phải kiểm tra sâu, bao phủ các trường hợp biên (boundary), dữ liệu đối kháng (adversarial/spoofed input), lỗi sập nguồn/mạng (fault injection, timeout) và xung đột đồng thời (race condition).
+
 
 ---
 

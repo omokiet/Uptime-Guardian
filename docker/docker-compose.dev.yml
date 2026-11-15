@@ -92,6 +92,8 @@ services:
       dockerfile: services/scheduler/Dockerfile
     container_name: uptime-scheduler
     restart: unless-stopped
+    expose:
+      - "8002"
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/uptime_guardian
       REDIS_URL: redis://redis:6379/0
@@ -112,6 +114,8 @@ services:
       dockerfile: services/checker/Dockerfile
     container_name: uptime-checker
     restart: unless-stopped
+    expose:
+      - "8001"
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/uptime_guardian
       REDIS_URL: redis://redis:6379/0

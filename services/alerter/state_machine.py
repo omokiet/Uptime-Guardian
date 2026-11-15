@@ -9,6 +9,15 @@ from services.common.models import AlertConfig, Monitor
 from services.common.redis_client import get_redis_client
 
 
+LUA_SAFE_UNLOCK = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+else
+    return 0
+end
+"""
+
+
 async def send_telegram_alert(chat_id: str, message: str) -> bool:
     notifier = get_notifier("telegram")
     if notifier:
@@ -59,10 +68,11 @@ async def handle_alert_event(event: dict) -> None:
     redis_client = get_redis_client()
     lock_key = f"lock:alert:{monitor_id_str}"
     state_key = f"monitor:state:{monitor_id_str}"
+    lock_token = str(uuid.uuid4())
 
     lock_acquired = False
     for _ in range(4):
-        if await redis_client.set(lock_key, "1", ex=10, nx=True):
+        if await redis_client.set(lock_key, lock_token, ex=15, nx=True):
             lock_acquired = True
             break
         await asyncio.sleep(0.5)
@@ -80,6 +90,8 @@ async def handle_alert_event(event: dict) -> None:
 
         threshold = settings.CONSECUTIVE_THRESHOLD
         monitor_name = url
+        msg_to_notify = None
+
         async with AsyncSessionLocal() as session:
             m_res = await session.execute(select(Monitor).where(Monitor.id == m_uuid))
             mon = m_res.scalar_one_or_none()
@@ -89,13 +101,12 @@ async def handle_alert_event(event: dict) -> None:
 
             if is_success:
                 if current_status == "DOWN":
-                    msg = (
+                    msg_to_notify = (
                         f"✅ *[RECOVERY] Dịch vụ đã hoạt động trở lại*\n"
                         f"• *Tên:* {monitor_name}\n"
                         f"• *URL:* {url}\n"
                         f"• *Thời gian:* `{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}`"
                     )
-                    await notify_channels(m_uuid, monitor_name, msg)
 
                 current_status = "UP"
                 consecutive_fails = 0
@@ -109,7 +120,7 @@ async def handle_alert_event(event: dict) -> None:
                     if now_ms >= cooldown_until:
                         cooldown_ms = settings.COOLDOWN_MINUTES * 60 * 1000
                         cooldown_until = now_ms + cooldown_ms
-                        msg = (
+                        msg_to_notify = (
                             f"🚨 *[DOWN ALERT] Dịch vụ ngừng hoạt động*\n"
                             f"• *Tên:* {monitor_name}\n"
                             f"• *URL:* {url}\n"
@@ -117,7 +128,6 @@ async def handle_alert_event(event: dict) -> None:
                             f"• *Số lần fail liên tiếp:* {consecutive_fails}\n"
                             f"• *Thời gian:* `{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}`"
                         )
-                        await notify_channels(m_uuid, monitor_name, msg)
 
             await redis_client.hset(
                 state_key,
@@ -133,5 +143,8 @@ async def handle_alert_event(event: dict) -> None:
                 mon.current_status = current_status
                 await session.commit()
 
+        if msg_to_notify:
+            await notify_channels(m_uuid, monitor_name, msg_to_notify)
+
     finally:
-        await redis_client.delete(lock_key)
+        await redis_client.eval(LUA_SAFE_UNLOCK, 1, lock_key, lock_token)

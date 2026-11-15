@@ -27,14 +27,6 @@ def _is_trusted_proxy(ip_str: str) -> bool:
 def get_client_ip(request: Request) -> str:
     direct_ip = request.client.host if request.client and request.client.host else "unknown"
     if settings.TRUST_PROXY and _is_trusted_proxy(direct_ip):
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            candidate = forwarded.split(",")[0].strip()
-            try:
-                ipaddress.ip_address(candidate)
-                return candidate
-            except ValueError:
-                pass
         real_ip = request.headers.get("X-Real-IP")
         if real_ip:
             candidate = real_ip.strip()
@@ -43,6 +35,17 @@ def get_client_ip(request: Request) -> str:
                 return candidate
             except ValueError:
                 pass
+
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+            for part in reversed(parts):
+                try:
+                    ipaddress.ip_address(part)
+                    return part
+                except ValueError:
+                    continue
+
     return direct_ip
 
 

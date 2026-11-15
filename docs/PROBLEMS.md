@@ -209,3 +209,118 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
   - Thêm bộ chọn Auto-Refresh kiểu Grafana (`Off`, `5s`, `10s`, `15s`, `30s`, `1m`) trên Toolbar của trang chủ Dashboard và Header của Monitor Detail Modal.
   - Tự động gọi ngầm `fetchDetail()` và `fetchMonitors()` định kỳ mà không gây giật lag giao diện hay reset vị trí cuộn.
 
+---
+
+## 22. [ĐÃ XỬ LÝ] Triển khai: Thiếu `TRUST_PROXY=True` trong Docker Compose Production
+- **Vị trí:** `docker/docker-compose.prod.yml`, `docker/caddy/Caddyfile`, `services/api_gateway/rate_limiter.py`
+- **Trạng thái:** Đã xử lý (Branch `fix/must-fix-audit-findings`).
+- **Giải pháp đã triển khai:**
+  - Cập nhật `docker-compose.prod.yml` bổ sung `TRUST_PROXY: "true"` cho container `api-gateway`.
+  - Cấu hình Caddyfile chuyển tiếp `header_up X-Real-IP {remote_host}` tới upstream API Gateway.
+  - Sửa `get_client_ip` ưu tiên đọc `X-Real-IP` từ Caddy; nếu đọc `X-Forwarded-For` thì lấy IP cuối cùng bên phải (`reversed(parts)`) để loại trừ IP giả mạo do attacker inject từ client.
+  - Bổ sung test kiểm thử khách quan trong `test_api_auth.py` và `test_infrastructure.py`.
+
+---
+
+## 23. [ĐÃ XỬ LÝ] Độ tin cậy: Checker Worker vẫn `requeue=False` — Job bị mất khi DB lỗi tạm thời
+- **Vị trí:** `services/checker/main.py`
+- **Trạng thái:** Đã xử lý (Branch `fix/must-fix-audit-findings`).
+- **Giải pháp đã triển khai:**
+  - Tách pha xử lý: Parse JSON hỏng (poison message) được ACK loại bỏ bằng `requeue=False` để tránh vòng lặp vô tận.
+  - Chạy `process_check_job` trong `message.process(requeue=True)`: Khi gặp exception mạng/DB tạm thời, message tự động được NACK và requeue vào RabbitMQ.
+  - Bổ sung unit test `test_checker_worker_requeues_on_transient_failure` và xác thực `requeue=False` cho poison message trong `test_checker.py`.
+
+---
+
+## 24. [ĐÃ XỬ LÝ] Đồng bộ phân tán: Alerter Lock thiếu Owner Token — Lock Stealing khi Notification chậm
+- **Vị trí:** `services/alerter/state_machine.py`
+- **Trạng thái:** Đã xử lý (Branch `fix/must-fix-audit-findings`).
+- **Giải pháp đã triển khai:**
+  - Gán lock value bằng `lock_token = str(uuid.uuid4())`, tăng TTL lên 15 giây.
+  - Giải phóng lock qua Lua script nguyên tử `LUA_SAFE_UNLOCK`: Chỉ xóa key khi token trong Redis khớp chính xác với token của worker đang giữ, ngăn chặn triệt để lock stealing khi notification chậm.
+  - Tách `notify_channels()` ra ngoài transaction DB, commit và giải phóng session DB trước khi gửi outbound HTTP/SMTP.
+  - Thêm unit test `test_alerter_lock_owner_token_safe_release` trong `test_alerter.py`.
+
+---
+
+## 25. [ĐÃ XỬ LÝ] Quan sát hệ thống: Checker & Scheduler không expose Prometheus metrics endpoint
+- **Vị trí:** `services/checker/main.py`, `services/scheduler/main.py`, `docker/prometheus/prometheus.yml`, `docker/docker-compose.*.yml`
+- **Trạng thái:** Đã xử lý (Branch `fix/must-fix-audit-findings`).
+- **Giải pháp đã triển khai:**
+  - Bổ sung hàm `start_metrics_server` chạy nền an toàn (bắt `OSError` chống port conflict trong test) cho Checker (port 8001) và Scheduler (port 8002).
+  - Khai báo `expose: 8001` cho checker và `expose: 8002` cho scheduler trong cả `docker-compose.dev.yml` và `docker-compose.prod.yml`.
+  - Cập nhật `docker/prometheus/prometheus.yml` với 2 scrape targets mới: `checker:8001` và `scheduler:8002`.
+  - Bổ sung test kiểm thử tự động `test_metrics_server_startup_and_port_conflict` và `test_prometheus_scrape_configuration` trong `test_infrastructure.py`.
+
+---
+
+## 26. Hiệu năng: TLS Handshake trùng lặp trên mỗi HTTPS Check
+- **Vị trí:** `services/checker/checker.py:114-121` (`check_ssl_days` + `execute_check`)
+- **Trạng thái:** Chưa xử lý.
+- **Vấn đề:** Mỗi lần check HTTPS, `check_ssl_days` mở kết nối TLS riêng đọc certificate `notAfter`, sau đó `execute_check` lại TLS handshake lần 2 qua httpx. Certificate expiration thay đổi rất chậm (thường 90 ngày).
+- **Mức độ:** Should fix.
+- **Giải pháp đề xuất:** Cache `ssl_days_remaining` trong Redis key `ssl:cert:{hostname}:{port}` với TTL 12h. Chỉ mở socket TLS khi cache miss.
+
+---
+
+## 27. UX: Dashboard hiển thị lỗi kết nối giả khi chưa đăng nhập
+- **Vị trí:** `services/dashboard/src/App.tsx:48-65`
+- **Trạng thái:** Chưa xử lý.
+- **Vấn đề:** Khi không có token trong `localStorage`, `fetchUserData()` vẫn gọi `fetchMonitors()` → `apiGetMonitors()` gửi request không Bearer → backend trả 403 (HTTPBearer `auto_error=True`) → catch block set `connectionError = "Unable to connect to API Gateway"`. Người dùng mới thấy banner đỏ cảnh báo backend chết trong khi backend hoạt động bình thường.
+- **Mức độ:** Should fix.
+- **Giải pháp đề xuất:** Khi `!token`, skip `fetchMonitors()`, set `monitors = []` và hiển thị prompt đăng nhập thay vì error banner.
+
+---
+
+## 28. Hiệu năng: Scheduler publish RabbitMQ tuần tự gây jitter khi fleet lớn
+- **Vị trí:** `services/scheduler/scheduler.py:90-113` (`process_due_monitors`)
+- **Trạng thái:** Chưa xử lý.
+- **Vấn đề:** Scheduler await `publish_message` tuần tự cho tối đa 100 monitor, sau đó mới `pipe.execute()` cập nhật Redis scores. Nếu RabbitMQ disconnect giữa chừng, Redis pipeline chưa commit → các monitor đã dispatch bị lease 60s nhưng chưa cập nhật score mới → có thể bị dispatch trùng lặp sau khi lease hết hạn.
+- **Mức độ:** Should fix.
+- **Giải pháp đề xuất:** Dispatch song song bằng `asyncio.gather` hoặc batch publish qua `aio_pika.Transaction`. Commit Redis pipeline đồng bộ với từng nhóm job đã gửi thành công.
+
+---
+
+## 29. Thiết kế: Soft Delete không phân biệt — Monitor đã xóa vẫn hiện trong danh sách
+- **Vị trí:** `services/api_gateway/services/monitor_service.py:162-167`, `services/api_gateway/repositories/monitor_repo.py:27-32`
+- **Trạng thái:** Chưa xử lý.
+- **Vấn đề:** Soft delete chỉ set `monitor.is_active = False`. Model `Monitor` không có cột `is_deleted`. Khi gọi `GET /api/v1/monitors` không truyền `is_active` filter, cả monitor active lẫn "đã xóa" đều trả về. Người dùng không thể loại monitor khỏi dashboard mà vẫn giữ lịch sử check.
+- **Mức độ:** Should fix.
+- **Giải pháp đề xuất:** Thêm cột `deleted_at: Optional[datetime]` vào model `Monitor`. `list_by_user` mặc định filter `Monitor.deleted_at.is_(None)`. Soft delete set `deleted_at = utc_now()` + `is_active = False`.
+
+---
+
+## 30. Hiệu năng: Alerter Notifiers tạo mới `httpx.AsyncClient` trên mỗi notification
+- **Vị trí:** `services/alerter/notifiers.py:29, 44, 62`
+- **Trạng thái:** Chưa xử lý.
+- **Vấn đề:** `TelegramNotifier`, `DiscordNotifier`, `WebhookNotifier` mỗi lần gửi đều `async with httpx.AsyncClient(...) as client:` → mở/đóng TCP connection và TLS handshake mỗi lần. Trong đợt DOWN lớn, hàng loạt notification gửi đồng thời gây socket churn.
+- **Mức độ:** Nice to have.
+- **Giải pháp đề xuất:** Tạo singleton `AsyncClient` dùng chung trong module `notifiers.py` với `AntiRebindingTransport`, tái sử dụng connection pool giống `checker.py`.
+
+---
+
+## 31. Mã chết: Route `serve_dashboard` trong API Gateway không bao giờ chạy trong Production
+- **Vị trí:** `services/api_gateway/main.py:87-94`
+- **Trạng thái:** Chưa xử lý.
+- **Vấn đề:** Route `GET /` cố serve `services/dashboard/index.html`. Trong production, dashboard build vào container riêng và Caddy serve trực tiếp. Container API Gateway không chứa source dashboard (đã loại bởi `.dockerignore`). Route không bao giờ match file.
+- **Mức độ:** Nice to have.
+- **Giải pháp đề xuất:** Xóa route `serve_dashboard` và import `os` không dùng.
+
+---
+
+## 32. Cấu hình: Checker hardcode tên queue `"alert.events"` thay vì dùng `settings`
+- **Vị trí:** `services/checker/checker.py:275`
+- **Trạng thái:** Chưa xử lý.
+- **Vấn đề:** `publish_message("alert.events", alert_event)` dùng string cứng. `settings.RABBITMQ_QUEUE_ALERT_EVENTS` đã tồn tại trong config nhưng không được sử dụng. Nếu đổi tên queue trong `.env`, checker gửi vào queue cũ, alerter lắng nghe queue mới → message mất.
+- **Mức độ:** Nice to have.
+- **Giải pháp đề xuất:** Thay `"alert.events"` bằng `settings.RABBITMQ_QUEUE_ALERT_EVENTS`. Import `settings` ở đầu file (đã có).
+
+---
+
+## 33. Hiệu năng: Batch DELETE trong `purge_old_check_results` dư thừa trên PostgreSQL
+- **Vị trí:** `services/common/rollup.py:127-152`
+- **Trạng thái:** Chưa xử lý.
+- **Vấn đề:** Trên PostgreSQL, hàm đã gọi `drop_expired_partitions` xóa toàn bộ partition cũ (O(1)). Tuy nhiên code vẫn tiếp tục chạy vòng lặp batch DELETE kiểm tra row-by-row. Sau khi drop partition, query trả 0 rows và break ngay nên impact thực tế thấp, nhưng vẫn quét default partition không cần thiết.
+- **Mức độ:** Nice to have.
+- **Giải pháp đề xuất:** Thêm `return total_deleted` ngay sau `drop_expired_partitions` khi dialect là PostgreSQL. Giữ batch DELETE chỉ cho SQLite fallback.
+
