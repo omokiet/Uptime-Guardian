@@ -314,37 +314,44 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 30. Hiệu năng: Alerter Notifiers tạo mới `httpx.AsyncClient` trên mỗi notification
-- **Vị trí:** `services/alerter/notifiers.py:29, 44, 62`
-- **Trạng thái:** Chưa xử lý.
-- **Vấn đề:** `TelegramNotifier`, `DiscordNotifier`, `WebhookNotifier` mỗi lần gửi đều `async with httpx.AsyncClient(...) as client:` → mở/đóng TCP connection và TLS handshake mỗi lần. Trong đợt DOWN lớn, hàng loạt notification gửi đồng thời gây socket churn.
-- **Mức độ:** Nice to have.
-- **Giải pháp đề xuất:** Tạo singleton `AsyncClient` dùng chung trong module `notifiers.py` với `AntiRebindingTransport`, tái sử dụng connection pool giống `checker.py`.
+## 30. [ĐÃ XỬ LÝ] Hiệu năng: Alerter Notifiers tạo mới `httpx.AsyncClient` trên mỗi notification
+- **Vị trí:** `services/alerter/notifiers.py:10-50`, `services/alerter/main.py:4-40`
+- **Trạng thái:** Đã xử lý (Branch `refactor/nice-to-have-improvements`).
+- **Giải pháp đã triển khai:**
+  - Tạo singleton client `get_alerter_httpx_client()` và hàm dọn dẹp `close_alerter_httpx_client()` trong `services/alerter/notifiers.py`.
+  - Cấu hình pool tái sử dụng với `Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30.0)` kèm `AntiRebindingTransport(verify=True)`.
+  - Bảo vệ chống lỗi event loop trong kiểm thử bằng cơ chế kiểm tra `_client_event_loop is not current_loop` và tự khởi tạo lại client mới.
+  - Cả 3 notifier `TelegramNotifier`, `DiscordNotifier`, `WebhookNotifier` đều tái sử dụng client pool này với timeout 5.0s per-request.
+  - Gọi `await close_alerter_httpx_client()` trong `finally` block của `services/alerter/main.py`.
+  - Bổ sung unit test `test_alerter_httpx_client_singleton_and_event_loop_lifecycle` và `test_notifiers_reuse_singleton_client` trong `tests/test_alerter.py`.
 
 ---
 
-## 31. Mã chết: Route `serve_dashboard` trong API Gateway không bao giờ chạy trong Production
-- **Vị trí:** `services/api_gateway/main.py:87-94`
-- **Trạng thái:** Chưa xử lý.
-- **Vấn đề:** Route `GET /` cố serve `services/dashboard/index.html`. Trong production, dashboard build vào container riêng và Caddy serve trực tiếp. Container API Gateway không chứa source dashboard (đã loại bởi `.dockerignore`). Route không bao giờ match file.
-- **Mức độ:** Nice to have.
-- **Giải pháp đề xuất:** Xóa route `serve_dashboard` và import `os` không dùng.
+## 31. [ĐÃ XỬ LÝ] Mã chết: Route `serve_dashboard` trong API Gateway không bao giờ chạy trong Production
+- **Vị trí:** `services/api_gateway/main.py:80-90`, `tests/test_api_gateway.py:45-55`
+- **Trạng thái:** Đã xử lý (Branch `refactor/nice-to-have-improvements`).
+- **Giải pháp đã triển khai:**
+  - Thay route `serve_dashboard` bằng route `root()` trả JSON gọn: `{"message": "Uptime Guardian API Gateway", "docs_url": "/docs"}`.
+  - Xóa bỏ import thừa `import os` và `FileResponse`.
+  - Cập nhật test `test_gateway_dashboard_and_health` trong `tests/test_api_gateway.py`.
 
 ---
 
-## 32. Cấu hình: Checker hardcode tên queue `"alert.events"` thay vì dùng `settings`
-- **Vị trí:** `services/checker/checker.py:275`
-- **Trạng thái:** Chưa xử lý.
-- **Vấn đề:** `publish_message("alert.events", alert_event)` dùng string cứng. `settings.RABBITMQ_QUEUE_ALERT_EVENTS` đã tồn tại trong config nhưng không được sử dụng. Nếu đổi tên queue trong `.env`, checker gửi vào queue cũ, alerter lắng nghe queue mới → message mất.
-- **Mức độ:** Nice to have.
-- **Giải pháp đề xuất:** Thay `"alert.events"` bằng `settings.RABBITMQ_QUEUE_ALERT_EVENTS`. Import `settings` ở đầu file (đã có).
+## 32. [ĐÃ XỬ LÝ] Cấu hình: Checker hardcode tên queue `"alert.events"` thay vì dùng `settings`
+- **Vị trí:** `services/checker/checker.py:295-305`
+- **Trạng thái:** Đã xử lý (Branch `refactor/nice-to-have-improvements`).
+- **Giải pháp đã triển khai:**
+  - Import `from services.common.config import settings` ở top-level file `services/checker/checker.py`.
+  - Thay thế chuỗi cứng `"alert.events"` bằng `settings.RABBITMQ_QUEUE_ALERT_EVENTS` trong `publish_message`.
+  - Bổ sung unit test `test_checker_publishes_to_configured_alert_queue` trong `tests/test_checker.py`.
 
 ---
 
-## 33. Hiệu năng: Batch DELETE trong `purge_old_check_results` dư thừa trên PostgreSQL
-- **Vị trí:** `services/common/rollup.py:127-152`
-- **Trạng thái:** Chưa xử lý.
-- **Vấn đề:** Trên PostgreSQL, hàm đã gọi `drop_expired_partitions` xóa toàn bộ partition cũ (O(1)). Tuy nhiên code vẫn tiếp tục chạy vòng lặp batch DELETE kiểm tra row-by-row. Sau khi drop partition, query trả 0 rows và break ngay nên impact thực tế thấp, nhưng vẫn quét default partition không cần thiết.
-- **Mức độ:** Nice to have.
-- **Giải pháp đề xuất:** Thêm `return total_deleted` ngay sau `drop_expired_partitions` khi dialect là PostgreSQL. Giữ batch DELETE chỉ cho SQLite fallback.
+## 33. [ĐÃ XỬ LÝ] Hiệu năng: Batch DELETE trong `purge_old_check_results` dư thừa trên PostgreSQL
+- **Vị trí:** `services/common/rollup.py:127-135`, `tests/test_table_partitioning.py:145-165`
+- **Trạng thái:** Đã xử lý (Branch `refactor/nice-to-have-improvements`).
+- **Giải pháp đã triển khai:**
+  - Khi dialect là `postgresql`: Gọi `dropped_partitions = await drop_expired_partitions(...)` và ngắt sớm bằng `return len(dropped_partitions)` (thời gian $O(1)$, không quét table, không sinh WAL hay dead tuples).
+  - Giữ vòng lặp batch DELETE 5000 records làm fallback cho SQLite in-memory test database.
+  - Bổ sung unit test `test_purge_old_check_results_postgresql_early_return` trong `tests/test_table_partitioning.py`.
 

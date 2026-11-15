@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 import httpx
+from services.common.config import settings
 from services.common.database import AsyncSessionLocal
 from services.common.metrics import (
     CHECKER_CHECKS_TOTAL,
@@ -296,7 +297,7 @@ async def process_check_job(payload: dict) -> bool:
             "response_time_ms": latency_ms,
             "error_message": error_msg,
         }
-        await publish_message("alert.events", alert_event)
+        await publish_message(settings.RABBITMQ_QUEUE_ALERT_EVENTS, alert_event)
         await redis_client.set(f"check:processed:{job_id_str}", "1", ex=300)
     finally:
         await redis_client.delete(in_flight_lock)

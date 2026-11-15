@@ -10,6 +10,8 @@ from services.alerter.notifiers import (
     EmailNotifier,
     TelegramNotifier,
     WebhookNotifier,
+    close_alerter_httpx_client,
+    get_alerter_httpx_client,
     get_notifier,
     send_notification,
 )
@@ -455,3 +457,49 @@ async def test_alerter_drops_soft_deleted_monitor_alert(db_session: AsyncSession
         mock_redis.delete.assert_called_once_with(f"monitor:state:{monitor.id}")
         assert not mock_notify.called
         assert mock_redis.eval.called
+
+
+@pytest.mark.asyncio
+async def test_alerter_httpx_client_singleton_and_event_loop_lifecycle():
+    client1 = get_alerter_httpx_client()
+    assert client1 is not None
+    assert not client1.is_closed
+
+    client2 = get_alerter_httpx_client()
+    assert client1 is client2
+
+    await close_alerter_httpx_client()
+    assert client1.is_closed
+
+    client3 = get_alerter_httpx_client()
+    assert client3 is not None
+    assert client3 is not client1
+    assert not client3.is_closed
+    await close_alerter_httpx_client()
+
+
+@pytest.mark.asyncio
+async def test_notifiers_reuse_singleton_client():
+    fake_resp = httpx.Response(200, json={"ok": True})
+    mock_post = AsyncMock(return_value=fake_resp)
+
+    client = get_alerter_httpx_client()
+    with patch.object(client, "post", mock_post), \
+         patch.object(settings, "TELEGRAM_BOT_TOKEN", "fake_bot_token"):
+
+        tg_res = await TelegramNotifier().send("12345", "Alert message")
+        assert tg_res is True
+        mock_post.assert_called_once()
+        assert "api.telegram.org" in mock_post.call_args[0][0]
+
+        mock_post.reset_mock()
+        discord_res = await DiscordNotifier().send("https://discord.com/api/webhooks/123", "Alert")
+        assert discord_res is True
+        mock_post.assert_called_once()
+
+        mock_post.reset_mock()
+        webhook_res = await WebhookNotifier().send("https://example.com/webhook", "Alert")
+        assert webhook_res is True
+        mock_post.assert_called_once()
+
+    await close_alerter_httpx_client()

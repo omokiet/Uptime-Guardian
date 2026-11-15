@@ -1,10 +1,9 @@
-import os
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from services.api_gateway.routers import alerts, auth, monitors
 from services.common.metrics import (
@@ -85,13 +84,8 @@ async def health_check():
 
 
 @app.get("/", include_in_schema=False)
-async def serve_dashboard():
-    dashboard_path = os.path.join(
-        os.path.dirname(__file__), "..", "dashboard", "index.html"
-    )
-    if os.path.exists(dashboard_path):
-        return FileResponse(dashboard_path)
-    return {"message": "Uptime Guardian API Gateway"}
+async def root():
+    return {"message": "Uptime Guardian API Gateway", "docs_url": "/docs"}
 
 
 app.include_router(auth.router, prefix="/api/v1")

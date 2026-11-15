@@ -1,5 +1,5 @@
 import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -145,3 +145,26 @@ async def test_backfill_missing_hourly_summaries(db_session: AsyncSession, test_
 async def test_purge_old_check_results_integration(db_session: AsyncSession):
     deleted = await purge_old_check_results(db_session, retention_days=7)
     assert deleted >= 0
+
+
+@pytest.mark.asyncio
+async def test_purge_old_check_results_postgresql_early_return():
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock()
+
+    with patch("services.common.rollup._get_dialect_name", return_value="postgresql"), \
+         patch("services.common.rollup.drop_expired_partitions", new_callable=AsyncMock) as mock_drop:
+
+        mock_drop.return_value = ["check_results_y2026_w30", "check_results_y2026_w31"]
+
+        deleted_count = await purge_old_check_results(mock_session, retention_days=7)
+
+        # Must return the count of dropped partitions immediately
+        assert deleted_count == 2
+        mock_drop.assert_called_once_with(
+            mock_session,
+            retention_days=7,
+            current_time=None,
+        )
+        # Verify batch delete query was NEVER executed on PostgreSQL
+        assert not mock_session.execute.called

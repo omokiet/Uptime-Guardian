@@ -48,13 +48,10 @@ async def test_gateway_dashboard_and_health(async_client: AsyncClient):
     assert resp_health.status_code == 200
     assert resp_health.json()["status"] == "ok"
 
-    resp_dash = await async_client.get("/")
-    assert resp_dash.status_code == 200
-
-    with patch("os.path.exists", return_value=False):
-        resp_root = await async_client.get("/")
-        assert resp_root.status_code == 200
-        assert resp_root.json()["message"] == "Uptime Guardian API Gateway"
+    resp_root = await async_client.get("/")
+    assert resp_root.status_code == 200
+    assert resp_root.json()["message"] == "Uptime Guardian API Gateway"
+    assert resp_root.json()["docs_url"] == "/docs"
 
 
 @pytest.mark.asyncio

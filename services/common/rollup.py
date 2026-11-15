@@ -125,7 +125,12 @@ async def purge_old_check_results(
     batch_size: int = 5000,
 ) -> int:
     if _get_dialect_name(session) == "postgresql":
-        await drop_expired_partitions(session, retention_days=retention_days, current_time=current_time)
+        dropped_partitions = await drop_expired_partitions(
+            session,
+            retention_days=retention_days,
+            current_time=current_time,
+        )
+        return len(dropped_partitions)
 
     base_time = current_time or datetime.now(timezone.utc)
     cutoff = base_time - timedelta(days=retention_days)

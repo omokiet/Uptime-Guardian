@@ -7,6 +7,47 @@ import httpx
 from services.common.config import settings
 from services.common.transport import AntiRebindingTransport
 
+_alerter_httpx_client: Optional[httpx.AsyncClient] = None
+_client_event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def get_alerter_httpx_client() -> httpx.AsyncClient:
+    global _alerter_httpx_client, _client_event_loop
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    if (
+        _alerter_httpx_client is None
+        or _alerter_httpx_client.is_closed
+        or _client_event_loop is not current_loop
+    ):
+        limits = httpx.Limits(
+            max_connections=100,
+            max_keepalive_connections=20,
+            keepalive_expiry=30.0,
+        )
+        transport = AntiRebindingTransport(
+            limits=limits,
+            verify=True,
+        )
+        _alerter_httpx_client = httpx.AsyncClient(
+            transport=transport,
+            verify=True,
+        )
+        _client_event_loop = current_loop
+
+    return _alerter_httpx_client
+
+
+async def close_alerter_httpx_client() -> None:
+    global _alerter_httpx_client, _client_event_loop
+    if _alerter_httpx_client is not None and not _alerter_httpx_client.is_closed:
+        await _alerter_httpx_client.aclose()
+        _alerter_httpx_client = None
+        _client_event_loop = None
+
 
 class BaseNotifier(abc.ABC):
     @abc.abstractmethod
@@ -26,9 +67,9 @@ class TelegramNotifier(BaseNotifier):
             "parse_mode": "Markdown",
         }
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(url, json=payload)
-                return resp.status_code == 200
+            client = get_alerter_httpx_client()
+            resp = await client.post(url, json=payload, timeout=5.0)
+            return resp.status_code == 200
         except Exception:
             return False
 
@@ -39,11 +80,10 @@ class DiscordNotifier(BaseNotifier):
             return False
 
         payload = {"content": message}
-        transport = AntiRebindingTransport(verify=True)
         try:
-            async with httpx.AsyncClient(transport=transport, timeout=5.0) as client:
-                resp = await client.post(destination, json=payload)
-                return 200 <= resp.status_code < 300
+            client = get_alerter_httpx_client()
+            resp = await client.post(destination, json=payload, timeout=5.0)
+            return 200 <= resp.status_code < 300
         except Exception:
             return False
 
@@ -57,11 +97,10 @@ class WebhookNotifier(BaseNotifier):
             "title": title or "Uptime Guardian Alert",
             "message": message,
         }
-        transport = AntiRebindingTransport(verify=True)
         try:
-            async with httpx.AsyncClient(transport=transport, timeout=5.0) as client:
-                resp = await client.post(destination, json=payload)
-                return 200 <= resp.status_code < 300
+            client = get_alerter_httpx_client()
+            resp = await client.post(destination, json=payload, timeout=5.0)
+            return 200 <= resp.status_code < 300
         except Exception:
             return False
 

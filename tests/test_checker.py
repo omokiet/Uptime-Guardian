@@ -13,6 +13,7 @@ from services.checker.checker import (
     process_check_job,
 )
 from services.checker.main import main as checker_main, run_checker_worker
+from services.common.config import settings
 from services.common.models import CheckResult, Monitor, User
 
 
@@ -610,3 +611,48 @@ async def test_checker_ssl_cache_redis_failure_fail_open():
         assert is_success is True
         assert ssl_days == 20
         assert mock_ssl_days.called
+
+
+@pytest.mark.asyncio
+async def test_checker_publishes_to_configured_alert_queue(db_session: AsyncSession, test_user: User):
+    monitor = Monitor(
+        user_id=test_user.id,
+        name="Queue Config Target",
+        url="https://queue.example.com",
+        interval_seconds=60,
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    job_id = str(uuid.uuid4())
+    payload = {
+        "job_id": job_id,
+        "monitor_id": str(monitor.id),
+        "url": monitor.url,
+    }
+
+    mock_redis = AsyncMock()
+    mock_redis.get = AsyncMock(return_value=None)
+    mock_redis.exists = AsyncMock(return_value=False)
+    mock_redis.set = AsyncMock(return_value=True)
+    mock_redis.delete = AsyncMock()
+
+    fake_response = httpx.Response(status_code=200, request=httpx.Request("GET", monitor.url))
+    fake_addr = [(None, None, None, None, ("93.184.216.34", 443))]
+
+    custom_queue = "custom.alert.events.test"
+    with patch("services.checker.checker.get_redis_client", return_value=mock_redis), \
+         patch("services.checker.checker.AsyncSessionLocal", return_value=db_session), \
+         patch("services.checker.checker.publish_message", new_callable=AsyncMock) as mock_pub, \
+         patch("socket.getaddrinfo", return_value=fake_addr), \
+         patch("httpx.AsyncClient.request", return_value=fake_response), \
+         patch("services.checker.checker.check_ssl_days", return_value=60), \
+         patch.object(settings, "RABBITMQ_QUEUE_ALERT_EVENTS", custom_queue):
+
+        res = await process_check_job(payload)
+        assert res is True
+        assert mock_pub.called
+        # Verify first positional argument of publish_message is the configured settings queue
+        queue_arg = mock_pub.call_args[0][0]
+        assert queue_arg == custom_queue

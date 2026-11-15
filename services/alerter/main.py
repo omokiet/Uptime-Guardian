@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from services.alerter.notifiers import close_alerter_httpx_client
 from services.alerter.state_machine import handle_alert_event
 from services.common.config import settings
 from services.common.rabbitmq import close_rabbitmq, get_rabbitmq_connection
@@ -37,6 +38,7 @@ async def main() -> None:
     try:
         await run_alerter_worker()
     finally:
+        await close_alerter_httpx_client()
         await close_redis()
         await close_rabbitmq()
 
