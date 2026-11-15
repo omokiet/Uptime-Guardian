@@ -1,16 +1,25 @@
+from pathlib import Path
 import socket
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 import aio_pika
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
+import yaml
 from services.alerter.main import main as alerter_main, run_alerter_worker
-from services.checker.main import main as checker_main, run_checker_worker
+from services.checker.main import (
+    main as checker_main,
+    run_checker_worker,
+    start_metrics_server as start_checker_metrics,
+)
 from services.common.database import get_db
 from services.common.rabbitmq import close_rabbitmq, get_rabbitmq_connection, publish_message
 from services.common.redis_client import close_redis, get_redis_client, get_redis_pool
 from services.common.ssrf import SSRFValidationError, validate_target_url
-from services.scheduler.main import main as scheduler_main
+from services.scheduler.main import (
+    main as scheduler_main,
+    start_metrics_server as start_scheduler_metrics,
+)
 
 
 @pytest.mark.asyncio
@@ -159,8 +168,58 @@ async def test_scheduler_main_execution():
     with patch("services.scheduler.main.run_scheduler_loop", new_callable=AsyncMock), \
          patch("services.scheduler.main.run_telemetry_maintenance_loop", new_callable=AsyncMock), \
          patch("services.scheduler.main.run_reconciliation_loop", new_callable=AsyncMock), \
+         patch("services.scheduler.main.start_metrics_server") as mock_metrics_srv, \
          patch("services.scheduler.main.close_redis", new_callable=AsyncMock) as mock_redis, \
          patch("services.scheduler.main.close_rabbitmq", new_callable=AsyncMock) as mock_rmq:
         await scheduler_main()
+        assert mock_metrics_srv.called
         assert mock_redis.called
         assert mock_rmq.called
+
+
+def test_metrics_server_startup_and_port_conflict():
+    with patch("prometheus_client.start_http_server") as mock_start:
+        start_checker_metrics(8001)
+        mock_start.assert_called_once_with(8001)
+
+    with patch("prometheus_client.start_http_server", side_effect=OSError("Address already in use")):
+        # Must catch OSError cleanly without raising exception
+        start_checker_metrics(8001)
+        start_scheduler_metrics(8002)
+
+
+def test_prometheus_scrape_configuration():
+    prom_path = Path("docker/prometheus/prometheus.yml")
+    assert prom_path.exists(), "docker/prometheus/prometheus.yml must exist"
+
+    with open(prom_path, "r", encoding="utf-8") as f:
+        prom_config = yaml.safe_load(f)
+
+    jobs = {job["job_name"]: job for job in prom_config.get("scrape_configs", [])}
+    assert "uptime-api-gateway" in jobs
+    assert jobs["uptime-api-gateway"]["static_configs"][0]["targets"] == ["api-gateway:8000"]
+
+    assert "uptime-checker" in jobs
+    assert jobs["uptime-checker"]["static_configs"][0]["targets"] == ["checker:8001"]
+
+    assert "uptime-scheduler" in jobs
+    assert jobs["uptime-scheduler"]["static_configs"][0]["targets"] == ["scheduler:8002"]
+
+
+def test_docker_compose_and_caddy_proxy_configs():
+    prod_path = Path("docker/docker-compose.prod.yml")
+    assert prod_path.exists()
+    with open(prod_path, "r", encoding="utf-8") as f:
+        prod_compose = yaml.safe_load(f)
+
+    api_env = prod_compose["services"]["api-gateway"]["environment"]
+    assert "TRUST_PROXY: \"true\"" in api_env or api_env.get("TRUST_PROXY") in (True, "true")
+
+    # Expose metrics ports on backend workers
+    assert "8001" in prod_compose["services"]["checker"]["expose"]
+    assert "8002" in prod_compose["services"]["scheduler"]["expose"]
+
+    caddy_path = Path("docker/caddy/Caddyfile")
+    assert caddy_path.exists()
+    caddy_content = caddy_path.read_text(encoding="utf-8")
+    assert "header_up X-Real-IP {remote_host}" in caddy_content

@@ -11,3 +11,13 @@ scrape_configs:
     metrics_path: "/metrics"
     static_configs:
       - targets: ["api-gateway:8000"]
+
+  - job_name: "uptime-checker"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["checker:8001"]
+
+  - job_name: "uptime-scheduler"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["scheduler:8002"]

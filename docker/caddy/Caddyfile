@@ -7,7 +7,9 @@
         tls internal
 
     handle /api/* {
-        reverse_proxy api-gateway:8000
+        reverse_proxy api-gateway:8000 {
+            header_up X-Real-IP {remote_host}
+        }
     }
 
     handle /health {

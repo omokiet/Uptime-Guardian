@@ -152,38 +152,54 @@ async def test_auth_rate_limiter_restores_missing_ttl(async_client: AsyncClient)
 
 def test_auth_get_client_ip_headers():
     req_forwarded = MagicMock()
-    req_forwarded.headers = {"X-Forwarded-For": "103.21.244.2, 192.168.1.1"}
+    # Spoofed IP injected by attacker, followed by real client IP appended by trusted reverse proxy
+    req_forwarded.headers = {"X-Forwarded-For": "103.21.244.2, 198.51.100.25"}
     req_forwarded.client.host = "10.0.0.5"
 
     with patch("services.api_gateway.rate_limiter.settings.TRUST_PROXY", False):
         assert get_client_ip(req_forwarded) == "10.0.0.5"
 
     with patch("services.api_gateway.rate_limiter.settings.TRUST_PROXY", True):
-        assert get_client_ip(req_forwarded) == "103.21.244.2"
+        # Case 1: X-Forwarded-For reads rightmost hop to prevent spoofing
+        assert get_client_ip(req_forwarded) == "198.51.100.25"
 
+        # Case 2: X-Real-IP takes precedence over X-Forwarded-For
+        req_both = MagicMock()
+        req_both.headers = {
+            "X-Real-IP": "198.51.100.77",
+            "X-Forwarded-For": "103.21.244.2, 198.51.100.25",
+        }
+        req_both.client.host = "127.0.0.1"
+        assert get_client_ip(req_both) == "198.51.100.77"
+
+        # Case 3: X-Real-IP alone
         req_real = MagicMock()
         req_real.headers = {"X-Real-IP": "198.51.100.5"}
         req_real.client.host = "127.0.0.1"
         assert get_client_ip(req_real) == "198.51.100.5"
 
+        # Case 4: Untrusted direct host ignores headers completely
         req_spoofed = MagicMock()
-        req_spoofed.headers = {"X-Forwarded-For": "1.1.1.1"}
+        req_spoofed.headers = {
+            "X-Forwarded-For": "1.1.1.1",
+            "X-Real-IP": "1.1.1.1",
+        }
         req_spoofed.client.host = "203.0.113.5"
         assert get_client_ip(req_spoofed) == "203.0.113.5"
 
-        # Case 4: Malformed IP in X-Forwarded-For falls back to direct IP
+        # Case 5: Malformed IP in X-Forwarded-For falls back to direct IP
         req_malformed_ff = MagicMock()
         req_malformed_ff.headers = {"X-Forwarded-For": "invalid_ip_format"}
         req_malformed_ff.client.host = "127.0.0.1"
         assert get_client_ip(req_malformed_ff) == "127.0.0.1"
 
-        # Case 5: Malformed IP in X-Real-IP falls back to direct IP
+        # Case 6: Malformed IP in X-Real-IP falls back to X-Forwarded-For or direct IP
         req_malformed_real = MagicMock()
         req_malformed_real.headers = {"X-Real-IP": "bad_real_ip"}
         req_malformed_real.client.host = "127.0.0.1"
         assert get_client_ip(req_malformed_real) == "127.0.0.1"
 
-        # Case 6: Invalid host string in request.client.host
+        # Case 7: Invalid host string in request.client.host
         req_invalid_host = MagicMock()
         req_invalid_host.headers = {"X-Forwarded-For": "1.1.1.1"}
         req_invalid_host.client.host = "unresolvable-domain"

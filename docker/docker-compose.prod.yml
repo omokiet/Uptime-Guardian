@@ -60,6 +60,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:-redispassword}@redis:6379/0
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
       SECRET_KEY: ${SECRET_KEY}
+      TRUST_PROXY: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -82,6 +83,8 @@ services:
       dockerfile: services/scheduler/Dockerfile
     container_name: uptime-scheduler
     restart: always
+    expose:
+      - "8002"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-uptime_guardian}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redispassword}@redis:6379/0
@@ -101,6 +104,8 @@ services:
       dockerfile: services/checker/Dockerfile
     container_name: uptime-checker
     restart: always
+    expose:
+      - "8001"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-uptime_guardian}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redispassword}@redis:6379/0
