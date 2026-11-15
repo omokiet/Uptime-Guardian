@@ -68,6 +68,7 @@ async def test_checker_executes_and_saves_result(db_session: AsyncSession, test_
     }
 
     mock_redis = AsyncMock()
+    mock_redis.get = AsyncMock(return_value=None)
     mock_redis.exists = AsyncMock(return_value=False)
     mock_redis.set = AsyncMock(return_value=True)
     mock_redis.delete = AsyncMock()
@@ -512,3 +513,100 @@ async def test_checker_worker_requeues_on_transient_failure():
         await run_checker_worker()
         # Message must be rejected with requeue=True so RabbitMQ redelivers
         assert requeue_flags == [True]
+
+
+@pytest.mark.asyncio
+async def test_checker_ssl_cache_hit_skips_socket_handshake():
+    mock_redis = AsyncMock()
+    mock_redis.get = AsyncMock(return_value="45")
+    fake_response = httpx.Response(
+        status_code=200,
+        request=httpx.Request("GET", "https://cached-ssl.example.com"),
+    )
+    fake_addr = [(None, None, None, None, ("93.184.216.34", 443))]
+
+    with patch("socket.getaddrinfo", return_value=fake_addr), \
+         patch("httpx.AsyncClient.request", return_value=fake_response), \
+         patch("services.checker.checker.check_ssl_days", new_callable=AsyncMock) as mock_ssl_days:
+
+        is_success, code, latency, err, ssl_days = await execute_check(
+            job_id=str(uuid.uuid4()),
+            monitor_id=str(uuid.uuid4()),
+            url="https://cached-ssl.example.com/health",
+            redis_client=mock_redis,
+        )
+
+        assert is_success is True
+        assert code == 200
+        assert ssl_days == 45
+        mock_redis.get.assert_called_once_with("ssl:cert:cached-ssl.example.com:443")
+        assert not mock_ssl_days.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "detected_days,expected_ttl",
+    [
+        (30, 43200),
+        (5, 3600),
+        (1, 600),
+        (0, 600),
+    ],
+)
+async def test_checker_ssl_cache_miss_populates_dynamic_ttl(detected_days: int, expected_ttl: int):
+    mock_redis = AsyncMock()
+    mock_redis.get = AsyncMock(return_value=None)
+    mock_redis.set = AsyncMock()
+
+    fake_response = httpx.Response(
+        status_code=200,
+        request=httpx.Request("GET", "https://uncached-ssl.example.com"),
+    )
+    fake_addr = [(None, None, None, None, ("93.184.216.34", 443))]
+
+    with patch("socket.getaddrinfo", return_value=fake_addr), \
+         patch("httpx.AsyncClient.request", return_value=fake_response), \
+         patch("services.checker.checker.check_ssl_days", new_callable=AsyncMock, return_value=detected_days):
+
+        is_success, code, latency, err, ssl_days = await execute_check(
+            job_id=str(uuid.uuid4()),
+            monitor_id=str(uuid.uuid4()),
+            url="https://uncached-ssl.example.com",
+            redis_client=mock_redis,
+        )
+
+        assert is_success is True
+        assert ssl_days == detected_days
+        mock_redis.set.assert_called_once_with(
+            "ssl:cert:uncached-ssl.example.com:443",
+            str(detected_days),
+            ex=expected_ttl,
+        )
+
+
+@pytest.mark.asyncio
+async def test_checker_ssl_cache_redis_failure_fail_open():
+    mock_redis = AsyncMock()
+    mock_redis.get = AsyncMock(side_effect=ConnectionError("Redis connection dropped"))
+    mock_redis.set = AsyncMock(side_effect=TimeoutError("Redis timeout"))
+
+    fake_response = httpx.Response(
+        status_code=200,
+        request=httpx.Request("GET", "https://fault-injection.example.com"),
+    )
+    fake_addr = [(None, None, None, None, ("93.184.216.34", 443))]
+
+    with patch("socket.getaddrinfo", return_value=fake_addr), \
+         patch("httpx.AsyncClient.request", return_value=fake_response), \
+         patch("services.checker.checker.check_ssl_days", new_callable=AsyncMock, return_value=20) as mock_ssl_days:
+
+        is_success, code, latency, err, ssl_days = await execute_check(
+            job_id=str(uuid.uuid4()),
+            monitor_id=str(uuid.uuid4()),
+            url="https://fault-injection.example.com",
+            redis_client=mock_redis,
+        )
+
+        assert is_success is True
+        assert ssl_days == 20
+        assert mock_ssl_days.called

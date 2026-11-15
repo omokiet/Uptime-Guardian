@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
@@ -416,3 +417,41 @@ async def test_notify_channels_all_fail_triggers_fallback(db_session: AsyncSessi
 
         await notify_channels(monitor.id, monitor.name, "Emergency Alert")
         mock_fallback.assert_called_once_with("default_emergency", "Emergency Alert")
+
+
+@pytest.mark.asyncio
+async def test_alerter_drops_soft_deleted_monitor_alert(db_session: AsyncSession, test_user: User):
+    monitor = Monitor(
+        user_id=test_user.id,
+        name="Deleted Mon",
+        url="https://deleted.alert.com",
+        is_active=False,
+        deleted_at=datetime.now(timezone.utc),
+    )
+    db_session.add(monitor)
+    await db_session.commit()
+    await db_session.refresh(monitor)
+
+    mock_redis = AsyncMock()
+    mock_redis.set = AsyncMock(return_value=True)
+    mock_redis.hgetall = AsyncMock(return_value={})
+    mock_redis.delete = AsyncMock()
+    mock_redis.eval = AsyncMock()
+
+    with patch("services.alerter.state_machine.get_redis_client", return_value=mock_redis), \
+         patch("services.alerter.state_machine.AsyncSessionLocal", return_value=db_session), \
+         patch("services.alerter.state_machine.notify_channels", new_callable=AsyncMock) as mock_notify:
+
+        await handle_alert_event(
+            {
+                "monitor_id": str(monitor.id),
+                "url": monitor.url,
+                "is_success": False,
+                "latency_ms": 100,
+                "error_message": "Connection timed out",
+            }
+        )
+
+        mock_redis.delete.assert_called_once_with(f"monitor:state:{monitor.id}")
+        assert not mock_notify.called
+        assert mock_redis.eval.called

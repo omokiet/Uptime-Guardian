@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-from services.common.models import CheckResult, HourlyUptimeSummary
+from services.common.models import CheckResult, HourlyUptimeSummary, Monitor
 
 
 @pytest.mark.asyncio
@@ -311,3 +311,87 @@ async def test_monitor_detail_fallback_to_recent_checks(
         data = detail_resp.json()
         assert float(data["uptime_percentage_24h"]) == 66.67
         assert data["avg_response_time_24h"] == 140
+
+
+@pytest.mark.asyncio
+async def test_monitor_soft_delete_lifecycle_and_query_exclusion(
+    async_client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+):
+    fake_addr_info = [(None, None, None, None, ("93.184.216.34", 80))]
+    mock_redis = AsyncMock()
+
+    with patch("socket.getaddrinfo", return_value=fake_addr_info), \
+         patch("services.api_gateway.routers.monitors.get_redis_client", return_value=mock_redis):
+
+        # 1. Create monitor
+        create_resp = await async_client.post(
+            "/api/v1/monitors",
+            json={"name": "Soft Delete Target", "url": "https://soft-delete.example.com", "is_active": True},
+            headers=auth_headers,
+        )
+        assert create_resp.status_code == 201
+        monitor_id = create_resp.json()["id"]
+
+        # Verify initial state in DB
+        db_mon = await db_session.get(Monitor, uuid.UUID(monitor_id))
+        assert db_mon is not None
+        assert db_mon.deleted_at is None
+        assert db_mon.is_active is True
+
+        # Insert check result history
+        res = CheckResult(
+            monitor_id=uuid.UUID(monitor_id),
+            job_id=uuid.uuid4(),
+            status_code=200,
+            response_time_ms=50,
+            is_success=True,
+        )
+        db_session.add(res)
+        await db_session.commit()
+
+        # 2. Soft delete
+        del_resp = await async_client.delete(
+            f"/api/v1/monitors/{monitor_id}?hard_delete=false",
+            headers=auth_headers,
+        )
+        assert del_resp.status_code == 204
+
+        # 3. Verify DB record marked as deleted
+        await db_session.refresh(db_mon)
+        assert db_mon.deleted_at is not None
+        assert db_mon.is_active is False
+        mock_redis.zrem.assert_called_with("scheduler:monitors", monitor_id)
+        mock_redis.delete.assert_called_with(f"monitor:state:{monitor_id}")
+
+        # 4. GET /monitors/{id} returns 404
+        get_resp = await async_client.get(f"/api/v1/monitors/{monitor_id}", headers=auth_headers)
+        assert get_resp.status_code == 404
+
+        # 5. GET /monitors list does not include deleted monitor
+        list_resp = await async_client.get("/api/v1/monitors", headers=auth_headers)
+        assert list_resp.status_code == 200
+        found_ids = [m["id"] for m in list_resp.json()]
+        assert monitor_id not in found_ids
+
+        # 6. PUT /monitors/{id} returns 404
+        update_resp = await async_client.put(
+            f"/api/v1/monitors/{monitor_id}",
+            json={"name": "Updated Deleted"},
+            headers=auth_headers,
+        )
+        assert update_resp.status_code == 404
+
+        # 7. Second DELETE returns 404
+        second_del = await async_client.delete(
+            f"/api/v1/monitors/{monitor_id}",
+            headers=auth_headers,
+        )
+        assert second_del.status_code == 404
+
+        # 8. GET history and summary still preserve data
+        hist_resp = await async_client.get(f"/api/v1/monitors/{monitor_id}/history", headers=auth_headers)
+        assert hist_resp.status_code == 200
+        assert len(hist_resp.json()) == 1
+        assert hist_resp.json()[0]["response_time_ms"] == 50

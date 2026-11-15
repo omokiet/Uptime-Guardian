@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import axios from 'axios';
 import {
   AlertCircle,
   Plus,
@@ -34,11 +35,22 @@ export const App: React.FC = () => {
   const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(10000);
 
   const fetchMonitors = useCallback(async () => {
+    const token = localStorage.getItem('ug_token');
+    if (!token) {
+      setMonitors([]);
+      setLoading(false);
+      return;
+    }
+
     try {
       const data = await apiGetMonitors();
       setMonitors(data);
       setConnectionError(null);
-    } catch {
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err) && (err.response?.status === 401 || err.response?.status === 403)) {
+        setMonitors([]);
+        return;
+      }
       setConnectionError('Unable to connect to API Gateway. (Showing cached data)');
     } finally {
       setLoading(false);
@@ -49,7 +61,8 @@ export const App: React.FC = () => {
     const token = localStorage.getItem('ug_token');
     if (!token) {
       setUser(null);
-      await fetchMonitors();
+      setMonitors([]);
+      setLoading(false);
       return;
     }
 
@@ -60,7 +73,8 @@ export const App: React.FC = () => {
     } catch {
       localStorage.removeItem('ug_token');
       setUser(null);
-      await fetchMonitors();
+      setMonitors([]);
+      setLoading(false);
     }
   }, [fetchMonitors]);
 
@@ -90,7 +104,8 @@ export const App: React.FC = () => {
   const handleLogout = () => {
     localStorage.removeItem('ug_token');
     setUser(null);
-    fetchMonitors();
+    setMonitors([]);
+    setConnectionError(null);
   };
 
   const handleCreateMonitor = async (payload: CreateMonitorPayload) => {

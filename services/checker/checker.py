@@ -3,7 +3,7 @@ import datetime
 import ssl
 import time
 import uuid
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 import httpx
 from services.common.database import AsyncSessionLocal
@@ -97,6 +97,7 @@ async def execute_check(
     method: str = "GET",
     timeout_seconds: int = 10,
     expected_status_code: int = 200,
+    redis_client: Optional[Any] = None,
 ) -> Tuple[bool, Optional[int], Optional[int], Optional[str], Optional[int]]:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -112,12 +113,34 @@ async def execute_check(
 
     ssl_days: Optional[int] = None
     if parsed.scheme == "https":
-        ssl_days = await check_ssl_days(
-            parsed.hostname,
-            port,
-            timeout=min(5.0, float(timeout_seconds)),
-            server_ip=safe_ip,
-        )
+        r_client = redis_client or get_redis_client()
+        ssl_cache_key = f"ssl:cert:{parsed.hostname}:{port}"
+        try:
+            cached_ssl = await r_client.get(ssl_cache_key)
+            if isinstance(cached_ssl, (str, bytes, int)):
+                ssl_days = int(cached_ssl)
+        except Exception:
+            ssl_days = None
+
+        if ssl_days is None:
+            ssl_days = await check_ssl_days(
+                parsed.hostname,
+                port,
+                timeout=min(5.0, float(timeout_seconds)),
+                server_ip=safe_ip,
+            )
+            if ssl_days is not None:
+                # Dynamic TTL: 12h for healthy certs, 1h when near expiry (<=7d), 10m when critical (<=1d)
+                if ssl_days > 7:
+                    cache_ttl = 43200
+                elif ssl_days > 1:
+                    cache_ttl = 3600
+                else:
+                    cache_ttl = 600
+                try:
+                    await r_client.set(ssl_cache_key, str(ssl_days), ex=cache_ttl)
+                except Exception:
+                    pass
 
     start_time = time.perf_counter()
     current_url = url
@@ -233,6 +256,7 @@ async def process_check_job(payload: dict) -> bool:
             method=method,
             timeout_seconds=timeout_seconds,
             expected_status_code=expected_status_code,
+            redis_client=redis_client,
         )
 
         CHECKER_CHECKS_TOTAL.labels(

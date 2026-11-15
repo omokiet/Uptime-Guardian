@@ -72,6 +72,7 @@ class MonitorResponse(MonitorBase):
     current_status: str
     created_at: datetime
     updated_at: datetime
+    deleted_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 

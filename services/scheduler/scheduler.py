@@ -44,7 +44,10 @@ async def sync_active_monitors_to_redis() -> None:
     now_ms = int(time.time() * 1000)
 
     async with AsyncSessionLocal() as session:
-        stmt = select(Monitor).where(Monitor.is_active.is_(True))
+        stmt = select(Monitor).where(
+            Monitor.is_active.is_(True),
+            Monitor.deleted_at.is_(None),
+        )
         result = await session.execute(stmt)
         monitors = result.scalars().all()
 
@@ -86,18 +89,17 @@ async def process_due_monitors(limit: int = 100) -> int:
         result = await session.execute(stmt)
         monitors_map = {m.id: m for m in result.scalars().all()}
 
+    active_monitors = []
+    publish_tasks = []
     pipe = redis_client.pipeline()
+
     for monitor_id in parsed_ids:
         monitor = monitors_map.get(monitor_id)
-
-        if not monitor or not monitor.is_active:
+        if not monitor or not monitor.is_active or getattr(monitor, "deleted_at", None) is not None:
             pipe.zrem("scheduler:monitors", str(monitor_id))
             continue
 
         job_id = uuid.uuid4()
-        next_score = now_ms + (monitor.interval_seconds * 1000)
-        pipe.zadd("scheduler:monitors", {str(monitor.id): next_score})
-
         payload = {
             "job_id": str(job_id),
             "monitor_id": str(monitor.id),
@@ -106,8 +108,19 @@ async def process_due_monitors(limit: int = 100) -> int:
             "timeout_seconds": monitor.timeout_seconds,
             "expected_status_code": monitor.expected_status_code,
         }
-        await publish_message(settings.RABBITMQ_QUEUE_CHECK_JOBS, payload)
-        SCHEDULER_DISPATCHED_JOBS_TOTAL.inc()
+        active_monitors.append(monitor)
+        publish_tasks.append(publish_message(settings.RABBITMQ_QUEUE_CHECK_JOBS, payload))
+
+    if publish_tasks:
+        results = await asyncio.gather(*publish_tasks, return_exceptions=True)
+        for monitor, res in zip(active_monitors, results):
+            if isinstance(res, Exception):
+                logger.error("Failed to publish check job for monitor %s: %s", monitor.id, res)
+                SCHEDULER_MAINTENANCE_ERRORS_TOTAL.labels(task="dispatch").inc()
+            else:
+                next_score = now_ms + (monitor.interval_seconds * 1000)
+                pipe.zadd("scheduler:monitors", {str(monitor.id): next_score})
+                SCHEDULER_DISPATCHED_JOBS_TOTAL.inc()
 
     await pipe.execute()
     return len(parsed_ids)
@@ -162,7 +175,10 @@ async def reconcile_monitors_with_redis() -> tuple[int, int]:
     now_ms = int(time.time() * 1000)
 
     async with AsyncSessionLocal() as session:
-        stmt = select(Monitor.id).where(Monitor.is_active.is_(True))
+        stmt = select(Monitor.id).where(
+            Monitor.is_active.is_(True),
+            Monitor.deleted_at.is_(None),
+        )
         result = await session.execute(stmt)
         active_ids = {str(m_id) for m_id in result.scalars().all()}
 

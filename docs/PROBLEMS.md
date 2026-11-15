@@ -254,39 +254,63 @@ Tài liệu ghi nhận các vấn đề kiến trúc, lỗ hổng bảo mật v�
 
 ---
 
-## 26. Hiệu năng: TLS Handshake trùng lặp trên mỗi HTTPS Check
-- **Vị trí:** `services/checker/checker.py:114-121` (`check_ssl_days` + `execute_check`)
-- **Trạng thái:** Chưa xử lý.
-- **Vấn đề:** Mỗi lần check HTTPS, `check_ssl_days` mở kết nối TLS riêng đọc certificate `notAfter`, sau đó `execute_check` lại TLS handshake lần 2 qua httpx. Certificate expiration thay đổi rất chậm (thường 90 ngày).
-- **Mức độ:** Should fix.
-- **Giải pháp đề xuất:** Cache `ssl_days_remaining` trong Redis key `ssl:cert:{hostname}:{port}` với TTL 12h. Chỉ mở socket TLS khi cache miss.
+## 26. [ĐÃ XỬ LÝ] Hiệu năng: TLS Handshake trùng lặp trên mỗi HTTPS Check
+- **Vị trí:** `services/checker/checker.py:114-144` (`check_ssl_days` + `execute_check`)
+- **Trạng thái:** Đã xử lý (Branch `fix/should-fix-audit-findings`).
+- **Giải pháp đã triển khai:**
+  - Cache `ssl_days_remaining` trong Redis key `ssl:cert:{hostname}:{port}`.
+  - Áp dụng Dynamic TTL dựa trên số ngày còn lại:
+    - > 7 ngày: TTL 43200s (12h - trạng thái chứng chỉ ổn định).
+    - 2-7 ngày: TTL 3600s (1h - cảnh báo sắp hết hạn).
+    - <= 1 ngày: TTL 600s (10m - trạng thái khẩn cấp).
+    - Lỗi handshake hoặc None: Không ghi cache.
+  - Thiết kế Fail-open: Bọc Redis try/except, nếu Redis sập thì tự động fallback về socket handshake mà không làm rớt check job.
+  - Bổ sung unit tests trong `tests/test_checker.py`: `test_checker_ssl_cache_hit_skips_socket_handshake`, `test_checker_ssl_cache_miss_populates_dynamic_ttl`, `test_checker_ssl_cache_redis_failure_fail_open`.
 
 ---
 
-## 27. UX: Dashboard hiển thị lỗi kết nối giả khi chưa đăng nhập
-- **Vị trí:** `services/dashboard/src/App.tsx:48-65`
-- **Trạng thái:** Chưa xử lý.
-- **Vấn đề:** Khi không có token trong `localStorage`, `fetchUserData()` vẫn gọi `fetchMonitors()` → `apiGetMonitors()` gửi request không Bearer → backend trả 403 (HTTPBearer `auto_error=True`) → catch block set `connectionError = "Unable to connect to API Gateway"`. Người dùng mới thấy banner đỏ cảnh báo backend chết trong khi backend hoạt động bình thường.
-- **Mức độ:** Should fix.
-- **Giải pháp đề xuất:** Khi `!token`, skip `fetchMonitors()`, set `monitors = []` và hiển thị prompt đăng nhập thay vì error banner.
+## 27. [ĐÃ XỬ LÝ] UX: Dashboard hiển thị lỗi kết nối giả khi chưa đăng nhập
+- **Vị trí:** `services/dashboard/src/App.tsx:48-95`
+- **Trạng thái:** Đã xử lý (Branch `fix/should-fix-audit-findings`).
+- **Giải pháp đã triển khai:**
+  - Trong `fetchMonitors()` và `fetchUserData()`: Nếu `!token`, return sớm, clear state `monitors = []`, xóa interval không gọi API unauthenticated.
+  - Trong catch block của `fetchMonitors`: Sử dụng `axios.isAxiosError` để phân biệt mã lỗi HTTP. Bỏ qua hoàn toàn các lỗi xác thực (401/403); chỉ hiển thị `connectionError` khi không nhận được response từ API Gateway (`!err.response`).
+  - Khi user đăng xuất (`handleLogout`), reset sạch state gồm `monitors`, `user`, `connectionError` và xóa interval polling.
 
 ---
 
-## 28. Hiệu năng: Scheduler publish RabbitMQ tuần tự gây jitter khi fleet lớn
-- **Vị trí:** `services/scheduler/scheduler.py:90-113` (`process_due_monitors`)
-- **Trạng thái:** Chưa xử lý.
-- **Vấn đề:** Scheduler await `publish_message` tuần tự cho tối đa 100 monitor, sau đó mới `pipe.execute()` cập nhật Redis scores. Nếu RabbitMQ disconnect giữa chừng, Redis pipeline chưa commit → các monitor đã dispatch bị lease 60s nhưng chưa cập nhật score mới → có thể bị dispatch trùng lặp sau khi lease hết hạn.
-- **Mức độ:** Should fix.
-- **Giải pháp đề xuất:** Dispatch song song bằng `asyncio.gather` hoặc batch publish qua `aio_pika.Transaction`. Commit Redis pipeline đồng bộ với từng nhóm job đã gửi thành công.
+## 28. [ĐÃ XỬ LÝ] Hiệu năng: Scheduler publish RabbitMQ tuần tự gây jitter khi fleet lớn
+- **Vị trí:** `services/scheduler/scheduler.py:90-125` (`process_due_monitors`)
+- **Trạng thái:** Đã xử lý (Branch `fix/should-fix-audit-findings`).
+- **Giải pháp đã triển khai:**
+  - Gom các tác vụ dispatch vào danh sách và publish đồng thời qua `asyncio.gather(*publish_tasks, return_exceptions=True)`.
+  - Phân tích kết quả từng job độc lập: Chỉ những monitor publish thành công mới được cập nhật `next_score` vào Redis pipeline; job thất bại giữ nguyên lease score 60s để scheduler tự động retry sau mà không làm lệch chu kỳ các monitor khác.
+  - Ghi log lỗi và tăng metric `SCHEDULER_MAINTENANCE_ERRORS_TOTAL.labels(task="dispatch")`.
+  - Bổ sung unit test trong `tests/test_scheduler.py`: `test_scheduler_batch_publish_partial_failure_retains_lease`.
 
 ---
 
-## 29. Thiết kế: Soft Delete không phân biệt — Monitor đã xóa vẫn hiện trong danh sách
-- **Vị trí:** `services/api_gateway/services/monitor_service.py:162-167`, `services/api_gateway/repositories/monitor_repo.py:27-32`
-- **Trạng thái:** Chưa xử lý.
-- **Vấn đề:** Soft delete chỉ set `monitor.is_active = False`. Model `Monitor` không có cột `is_deleted`. Khi gọi `GET /api/v1/monitors` không truyền `is_active` filter, cả monitor active lẫn "đã xóa" đều trả về. Người dùng không thể loại monitor khỏi dashboard mà vẫn giữ lịch sử check.
-- **Mức độ:** Should fix.
-- **Giải pháp đề xuất:** Thêm cột `deleted_at: Optional[datetime]` vào model `Monitor`. `list_by_user` mặc định filter `Monitor.deleted_at.is_(None)`. Soft delete set `deleted_at = utc_now()` + `is_active = False`.
+## 29. [ĐÃ XỬ LÝ] Thiết kế: Soft Delete không phân biệt — Monitor đã xóa vẫn hiện trong danh sách
+- **Vị trí:** `services/common/models.py`, `services/api_gateway/repositories/monitor_repo.py`, `services/api_gateway/services/monitor_service.py`, `services/scheduler/scheduler.py`, `services/alerter/state_machine.py`, `alembic/versions/003_add_monitor_deleted_at.py`
+- **Trạng thái:** Đã xử lý (Branch `fix/should-fix-audit-findings`).
+- **Giải pháp đã triển khai:**
+  - Tạo migration Alembic `003_add_monitor_deleted_at.py` thêm cột `deleted_at: DateTime(timezone=True)` cùng chỉ mục `idx_monitors_user_deleted (user_id, deleted_at)`.
+  - Cập nhật model `Monitor` và schema `MonitorResponse` hỗ trợ trường `deleted_at`.
+  - `MonitorRepository`:
+    - `get_by_id_and_user`: Mặc định filter `Monitor.deleted_at.is_(None)`. Cho phép `include_deleted=True` cho các truy vấn audit history/summary.
+    - `list_by_user`: Mặc định lọc bỏ hoàn toàn các monitor đã bị soft delete.
+  - `MonitorService`:
+    - `delete_monitor`: Khi `hard_delete=False`, gán `deleted_at = datetime.now(timezone.utc)` và `is_active = False`. Xóa key trạng thái `monitor:state:{id}` và gỡ khỏi Redis sorted set `scheduler:monitors`.
+    - Bảo toàn truy vấn lịch sử (`get_monitor_history`, `get_monitor_summary`) thông qua cờ `include_deleted=True`.
+  - `Scheduler`:
+    - `sync_active_monitors_to_redis` & `reconcile_monitors_with_redis`: Bổ sung điều kiện `Monitor.deleted_at.is_(None)`.
+    - `process_due_monitors`: Nếu gặp monitor có `deleted_at is not None`, lập tức gọi `zrem` dọn khỏi Redis và bỏ qua dispatch.
+  - `Alerter`:
+    - Khi nhận alert event cho monitor đã bị soft-deleted, xóa `monitor:state:{id}` và bỏ qua notification để chống ghost alerts.
+  - Bổ sung test kiểm thử tự động toàn diện:
+    - `test_monitor_soft_delete_lifecycle_and_query_exclusion` trong `tests/test_api_monitors.py`.
+    - `test_scheduler_excludes_soft_deleted_monitors` trong `tests/test_scheduler.py`.
+    - `test_alerter_drops_soft_deleted_monitor_alert` trong `tests/test_alerter.py`.
 
 ---
 

@@ -95,6 +95,10 @@ async def handle_alert_event(event: dict) -> None:
         async with AsyncSessionLocal() as session:
             m_res = await session.execute(select(Monitor).where(Monitor.id == m_uuid))
             mon = m_res.scalar_one_or_none()
+            if mon and mon.deleted_at is not None:
+                await redis_client.delete(state_key)
+                return
+
             if mon:
                 threshold = mon.consecutive_threshold
                 monitor_name = mon.name

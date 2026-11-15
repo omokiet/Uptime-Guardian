@@ -88,6 +88,11 @@ class Monitor(Base):
         onupdate=utc_now,
         nullable=False,
     )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
 
     user: Mapped["User"] = relationship("User", back_populates="monitors")
     check_results: Mapped[List["CheckResult"]] = relationship(
@@ -104,6 +109,10 @@ class Monitor(Base):
         "HourlyUptimeSummary",
         back_populates="monitor",
         cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        Index("idx_monitors_user_deleted", "user_id", "deleted_at"),
     )
 
 

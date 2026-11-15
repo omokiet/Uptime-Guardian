@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 import logging
 import time
@@ -163,6 +164,7 @@ class MonitorService:
             await self.monitor_repo.delete(monitor)
         else:
             monitor.is_active = False
+            monitor.deleted_at = datetime.now(timezone.utc)
 
         await self.db.commit()
 
@@ -173,7 +175,11 @@ class MonitorService:
         limit: int = 50,
         offset: int = 0,
     ) -> List[CheckResult]:
-        monitor = await self.monitor_repo.get_by_id_and_user(monitor_id=monitor_id, user_id=current_user.id)
+        monitor = await self.monitor_repo.get_by_id_and_user(
+            monitor_id=monitor_id,
+            user_id=current_user.id,
+            include_deleted=True,
+        )
         if not monitor:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -192,7 +198,11 @@ class MonitorService:
         monitor_id: uuid.UUID,
         hours: int = 24,
     ) -> List[HourlyUptimeSummary]:
-        monitor = await self.monitor_repo.get_by_id_and_user(monitor_id=monitor_id, user_id=current_user.id)
+        monitor = await self.monitor_repo.get_by_id_and_user(
+            monitor_id=monitor_id,
+            user_id=current_user.id,
+            include_deleted=True,
+        )
         if not monitor:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

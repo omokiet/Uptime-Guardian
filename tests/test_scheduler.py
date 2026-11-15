@@ -246,3 +246,118 @@ async def test_run_reconciliation_loop_fault_injection_recovery():
             await run_reconciliation_loop(interval_seconds=1)
         except asyncio.CancelledError:
             pass
+
+
+@pytest.mark.asyncio
+async def test_scheduler_batch_publish_partial_failure_retains_lease(db_session: AsyncSession, test_user: User):
+    m1 = Monitor(
+        user_id=test_user.id,
+        name="Batch M1",
+        url="https://m1.example.com",
+        interval_seconds=30,
+        is_active=True,
+    )
+    m2 = Monitor(
+        user_id=test_user.id,
+        name="Batch M2",
+        url="https://m2.example.com",
+        interval_seconds=60,
+        is_active=True,
+    )
+    db_session.add_all([m1, m2])
+    await db_session.commit()
+    await db_session.refresh(m1)
+    await db_session.refresh(m2)
+
+    mock_redis = AsyncMock()
+    mock_redis.eval = AsyncMock(return_value=[str(m1.id), str(m2.id)])
+    mock_pipe = AsyncMock()
+    mock_pipe.zadd = MagicMock()
+    mock_redis.pipeline = MagicMock(return_value=mock_pipe)
+
+    async def mock_publish(queue_name, payload):
+        if payload["monitor_id"] == str(m1.id):
+            raise RuntimeError("AMQP connection reset by peer")
+        return None
+
+    with patch("services.scheduler.scheduler.get_redis_client", return_value=mock_redis), \
+         patch("services.scheduler.scheduler.AsyncSessionLocal", return_value=db_session), \
+         patch("services.scheduler.scheduler.publish_message", side_effect=mock_publish):
+
+        count = await process_due_monitors(limit=10)
+        assert count == 2
+
+        # m1 failed to publish -> its score must NOT be updated (keeps 60s lease for retry)
+        # m2 succeeded -> its score must be updated
+        assert mock_pipe.zadd.call_count == 1
+        zadd_call_args = mock_pipe.zadd.call_args[0]
+        assert str(m2.id) in zadd_call_args[1]
+        assert str(m1.id) not in zadd_call_args[1]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_excludes_soft_deleted_monitors(db_session: AsyncSession, test_user: User):
+    m_active = Monitor(
+        user_id=test_user.id,
+        name="Active Mon",
+        url="https://active.example.com",
+        is_active=True,
+        deleted_at=None,
+    )
+    m_deleted = Monitor(
+        user_id=test_user.id,
+        name="Soft Deleted Mon",
+        url="https://deleted.example.com",
+        is_active=True,
+        deleted_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([m_active, m_deleted])
+    await db_session.commit()
+    await db_session.refresh(m_active)
+    await db_session.refresh(m_deleted)
+
+    # 1. sync_active_monitors_to_redis must skip soft-deleted
+    mock_redis = AsyncMock()
+    mock_pipe = AsyncMock()
+    mock_pipe.zadd = MagicMock()
+    mock_redis.pipeline = MagicMock(return_value=mock_pipe)
+
+    with patch("services.scheduler.scheduler.get_redis_client", return_value=mock_redis), \
+         patch("services.scheduler.scheduler.AsyncSessionLocal", return_value=db_session):
+
+        await sync_active_monitors_to_redis()
+        assert mock_pipe.zadd.call_count == 1
+        zadd_args = mock_pipe.zadd.call_args[0][1]
+        assert str(m_active.id) in zadd_args
+        assert str(m_deleted.id) not in zadd_args
+
+    # 2. process_due_monitors must purge soft-deleted monitor from Redis and not publish
+    mock_redis_due = AsyncMock()
+    mock_redis_due.eval = AsyncMock(return_value=[str(m_deleted.id)])
+    mock_pipe_due = AsyncMock()
+    mock_pipe_due.zrem = MagicMock()
+    mock_redis_due.pipeline = MagicMock(return_value=mock_pipe_due)
+
+    with patch("services.scheduler.scheduler.get_redis_client", return_value=mock_redis_due), \
+         patch("services.scheduler.scheduler.AsyncSessionLocal", return_value=db_session), \
+         patch("services.scheduler.scheduler.publish_message", new_callable=AsyncMock) as mock_pub:
+
+        count = await process_due_monitors(limit=10)
+        assert count == 1
+        assert not mock_pub.called
+        mock_pipe_due.zrem.assert_called_once_with("scheduler:monitors", str(m_deleted.id))
+
+    # 3. reconcile_monitors_with_redis must treat soft-deleted as not active
+    mock_redis_rec = AsyncMock()
+    mock_redis_rec.zrange = AsyncMock(return_value=[str(m_active.id), str(m_deleted.id)])
+    mock_pipe_rec = AsyncMock()
+    mock_pipe_rec.zrem = MagicMock()
+    mock_redis_rec.pipeline = MagicMock(return_value=mock_pipe_rec)
+
+    with patch("services.scheduler.scheduler.get_redis_client", return_value=mock_redis_rec), \
+         patch("services.scheduler.scheduler.AsyncSessionLocal", return_value=db_session):
+
+        added, removed = await reconcile_monitors_with_redis()
+        assert added == 0
+        assert removed == 1
+        mock_pipe_rec.zrem.assert_called_once_with("scheduler:monitors", str(m_deleted.id))
