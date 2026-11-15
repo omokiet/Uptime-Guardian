@@ -93,8 +93,7 @@ uptime-guardian/
 │   └── dashboard/         # Giao diện dashboard React + Vite + Tailwind CSS
 ├── docker/                # Docker Compose cho dev và production
 ├── tests/                 # Integration tests, unit tests, và benchmark k6
-├── docs/                  # Tài liệu đặc tả kỹ thuật, roadmap, debt tracking & hướng dẫn
-└── AGENTS.md              # Quy chuẩn cộng tác và trạm kiểm soát AI Agent
+└── docs/                  # Tài liệu đặc tả kỹ thuật, roadmap, debt tracking & hướng dẫn
 ```
 
 ---

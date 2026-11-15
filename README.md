@@ -70,7 +70,7 @@ An open-source, resilient, self-hosted distributed uptime monitoring platform en
 
 ##  Technology Stack
 
-- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0 (Async), Alembic, Pydantic v2
+- **Backend:** Python 3.13, FastAPI, SQLAlchemy 2.0 (Async), Alembic, Pydantic v2
 - **Message Broker & Cache:** RabbitMQ, Redis 7
 - **Database:** PostgreSQL 16
 - **Frontend:** React 18, Vite, Tailwind CSS
@@ -92,8 +92,7 @@ uptime-guardian/
 │   └── dashboard/         # React + Vite + Tailwind CSS monitoring dashboard
 ├── docker/                # Local development & production Docker Compose configs
 ├── tests/                 # Integration tests, unit tests, and k6 benchmark scripts
-├── docs/                  # Architecture specs, roadmaps, debt tracking, & guides
-└── AGENTS.md              # AI agent guidelines & workflow rules
+└── docs/                  # Architecture specs, roadmaps, debt tracking, & guides
 ```
 
 ---
