@@ -13,6 +13,7 @@ import {
   apiGetMe,
   apiGetMonitors,
 } from './api/client';
+import { TelemetryStatusChangeData, useWebSocketTelemetry } from './api/websocket';
 import { AddMonitorModal } from './components/AddMonitorModal';
 import { AuthModal } from './components/AuthModal';
 import { MonitorCard } from './components/MonitorCard';
@@ -33,6 +34,16 @@ export const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'UP' | 'DOWN'>('ALL');
   const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(10000);
+
+  const handleStatusChange = useCallback((data: TelemetryStatusChangeData) => {
+    setMonitors((prev) =>
+      prev.map((m) => (m.id === data.monitor_id ? { ...m, current_status: data.new_status } : m))
+    );
+  }, []);
+
+  useWebSocketTelemetry({
+    onStatusChange: handleStatusChange,
+  });
 
   const fetchMonitors = useCallback(async () => {
     const token = localStorage.getItem('ug_token');

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { Monitor } from '../types';
 
 export interface TelemetryCheckResultData {
   monitor_id: string;
@@ -12,8 +13,8 @@ export interface TelemetryCheckResultData {
 
 export interface TelemetryStatusChangeData {
   monitor_id: string;
-  previous_status: string;
-  new_status: string;
+  previous_status: Monitor['current_status'];
+  new_status: Monitor['current_status'];
   reason: string;
 }
 

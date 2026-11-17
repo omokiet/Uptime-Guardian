@@ -14,10 +14,10 @@ Nền tảng mã nguồn mở tự vận hành (self-hosted), chịu lỗi cao, 
                             ┌────────────────────────┐
                             │    React Dashboard     │
                             │ (Vite + Tailwind / UI) │
-                            └───────────┬────────────┘
-                                        │ REST (JWT)
-                            ┌───────────▼────────────┐
-                            │      API Gateway       │ ◄── [Reverse Proxy: Caddy / Nginx]
+                            └─────┬────────────▲─────┘
+                        REST (JWT)│            │ WebSocket (/ws/telemetry)
+                            ┌─────▼────────────┴─────┐
+                            │      API Gateway       │ ◄── [Reverse Proxy: Caddy]
                             │   (FastAPI / Python)   │     (Cấp phát SSL HTTPS tự động)
                             └───────────┬────────────┘
                                         │
@@ -26,25 +26,25 @@ Nền tảng mã nguồn mở tự vận hành (self-hosted), chịu lỗi cao, 
            ▼                            ▼                            ▼
 ┌──────────────────────┐     ┌──────────────────────┐     ┌──────────────────────┐
 │  Distributed Sched.  │     │    PostgreSQL 16     │     │      Redis 7         │
-│  (Redis Sorted Set)  │     │ (Monitors, Summaries)│     │(ZSET, State, Locks)  │
-└──────────┬───────────┘     └──────────▲───────────┘     └──────────┬───────────┘
-           │ Job payload                │                            │
+│  (Redis Sorted Set)  │     │ (Monitors, Partition)│     │(ZSET, State, Quorum, │
+└──────────┬───────────┘     └──────────▲───────────┘     │ Pub/Sub Telemetry)   │
+           │ Job payload                │                 └──────────┬───────────┘
            ▼                            │                            │
 ┌──────────────────────┐                │                            │
-│ RabbitMQ: check.jobs │                │ Lưu kết quả                │ Cập nhật state
+│ RabbitMQ: check.jobs │                │ Lưu kết quả                │ State & Quorum
 └──────────┬───────────┘                │                            │
            │ Consume                    │                            │
            ▼                            │                            │
-┌──────────────────────┐                │                            │
-│   Checker Workers    ├────────────────┘                            │
-│  (httpx, SSL, DNS)   ├──────────────────────────────┐              │
-└──────────────────────┘                              │              │
-                                                      │ Publish      │
-                                                      ▼              ▼
-                                           ┌──────────────────────────────┐
-                                           │     Alerter Worker Service   │
-                                           │  (State Machine + Telegram)  │
-                                           └──────────────────────────────┘
+┌───────────────────────────────────────┴────────────────────────┐   │
+│                 Hạm Đội Regional Checker Workers               │   │
+│   (vn-han, sg-sin, us-iad — httpx, Anti-SSRF, DNS, Quorum)     │   │
+└──────────┬────────────────────────────┬────────────────────────┘   │
+           │ Challenge exchange         │ Publish                    │
+           ▼                            ▼                            ▼
+┌──────────────────────┐     ┌───────────────────────────────────────────┐
+│  quorum.exchange     │     │          Alerter Worker Service           │
+│ (AMQP Topic Exchange)│     │   (Consensus Engine + State Machine)      │
+└──────────────────────┘     └───────────────────────────────────────────┘
 ```
 
 ---
@@ -61,11 +61,19 @@ Nền tảng mã nguồn mở tự vận hành (self-hosted), chịu lỗi cao, 
 3. **Tính Idempotency của Worker:**
    - Theo dõi mã duy nhất `job_id` (UUIDv4) với Redis `SET EX NX` (300s TTL) chống ghi đè dữ liệu hoặc gửi cảnh báo giả khi RabbitMQ redeliver message.
 4. **Data Retention & Hourly Rollup 2 Tầng:**
-   - Dữ liệu thô kiểm tra chi tiết được lưu trong 7 ngày.
+   - Dữ liệu thô kiểm tra chi tiết được lưu trong 7 ngày trên bảng PostgreSQL range partition theo tuần.
    - Background cron tổng hợp định kỳ hàng giờ vào bảng `hourly_uptime_summary` để vẽ biểu đồ 30 ngày siêu nhẹ, tránh phình cơ sở dữ liệu PostgreSQL.
 5. **Observability Chuẩn SRE:**
    - Xuất telemetry theo chuẩn RED (Rate, Errors, Duration) cho Prometheus và bảng điều khiển Grafana.
    - Mục tiêu chịu tải thiết kế >2,000 checks/giây (số đo baseline đơn node hiện tại: ~200 RPS qua k6).
+6. **Kiểm Định Đồng Thuận Đa Vùng (Multi-Region Quorum Consensus):**
+   - Xác thực chéo out-of-band qua các vùng địa lý (`vn-han`, `sg-sin`, `us-iad`) sử dụng topic exchange `quorum.exchange`.
+   - Quản lý phiên bỏ phiếu Redis (`quorum:session:<challenge_id>`) kèm atomic lock `HSETNX` trên quyết định, ngăn chặn bão cảnh báo giả do sự cố peering mạng cục bộ.
+   - Fast-track chuyển ngay sang `DOWN` khi đa số vùng xác nhận hỏng, đồng thời tự động đánh dấu `is_suppressed=True` cho sự cố quá cảnh cục bộ để bảo vệ trọn vẹn 100% SLA khách hàng.
+7. **Truyền Dữ Liệu Thời Gian Thực Qua Live WebSocket Gateway:**
+   - Đẩy trực tiếp các sự kiện `check_result` và `status_change` lên Dashboard qua `/ws/telemetry` thông qua cơ chế multiplexing Redis Pub/Sub theo từng `user_id`.
+   - Cơ chế buffer bounded queue (`asyncio.Queue(maxsize=100)`) với chiến lược `drop_oldest` triệt tiêu nguy cơ tràn RAM khi gặp client kết nối chậm (Slow Consumer).
+   - Client React tự động phục hồi kết nối bằng thuật toán Exponential Backoff (1s, 2s, 4s, tối đa 10s).
 
 ---
 
@@ -73,10 +81,10 @@ Nền tảng mã nguồn mở tự vận hành (self-hosted), chịu lỗi cao, 
 
 - **Backend:** Python 3.13, FastAPI, SQLAlchemy 2.0 (Async), Alembic, Pydantic v2
 - **Message Broker & Cache:** RabbitMQ, Redis 7
-- **Database:** PostgreSQL 16
-- **Frontend:** React 18, Vite, Tailwind CSS (kèm bản Vanilla UI tích hợp sẵn)
-- **Hạ tầng & SRE:** Docker, Docker Compose, Caddy/Nginx, Terraform, Prometheus, Grafana
-- **Testing & Chất lượng:** Pytest, pytest-asyncio, k6, Flake8, Bandit SAST
+- **Database:** PostgreSQL 16 (Phân vùng theo tuần - Range Partitioning)
+- **Frontend:** React 18, Vite, Tailwind CSS, Recharts
+- **Hạ tầng & SRE:** Docker, Docker Compose, Caddy Reverse Proxy, Prometheus, Grafana
+- **Testing & Chất lượng:** Pytest, pytest-asyncio (168 tests), k6, Flake8, Bandit SAST
 
 ---
 
@@ -85,14 +93,14 @@ Nền tảng mã nguồn mở tự vận hành (self-hosted), chịu lỗi cao, 
 ```
 uptime-guardian/
 ├── services/
-│   ├── api_gateway/       # FastAPI REST API (CRUD monitors, auth, stats)
+│   ├── api_gateway/       # FastAPI REST & WebSocket Gateway (/ws/telemetry, auth, monitors)
 │   ├── scheduler/         # Redis ZSET distributed scheduler -> RabbitMQ producer
-│   ├── checker/           # Async HTTP/SSL/DNS worker với cơ chế Idempotency
-│   ├── alerter/           # Telegram alert service với state machine & cooldown
-│   ├── common/            # Module dùng chung (ORM models, database, Anti-SSRF)
+│   ├── checker/           # Multi-region probe workers (HTTP, SSL, Anti-SSRF, Quorum consumer)
+│   ├── alerter/           # Quorum consensus engine + State machine notification service
+│   ├── common/            # Module dùng chung (ORM models, dual-dialect schemas, Anti-SSRF)
 │   └── dashboard/         # Giao diện dashboard React + Vite + Tailwind CSS
 ├── docker/                # Docker Compose cho dev và production
-├── tests/                 # Integration tests, unit tests, và benchmark k6
+├── tests/                 # 168+ unit tests, integration tests, và benchmark k6
 └── docs/                  # Tài liệu đặc tả kỹ thuật, roadmap, debt tracking & hướng dẫn
 ```
 
@@ -100,8 +108,8 @@ uptime-guardian/
 
 ## Tóm Tắt Lộ Trình Triển Khai
 
-- **Milestone 1 (v0.1.0): Lõi Phân Tán (Đã Hoàn Thành)** — Database schema, FastAPI Gateway, atomic Redis ZSET scheduler, idempotent checker, alert state machine, và dashboard giao diện polling (live WebSocket telemetry nằm trong kế hoạch v0.3.0).
-- **Milestone 2 (v0.2.0): Vận Hành Production & SRE Observability (Đang Triển Khai)** — Terraform IaC, reverse proxy TLS tự động, Prometheus/Grafana RED metrics, GitHub Actions CI/CD, React Tailwind dashboard, và k6 load test.
-- **Milestone 3 (v0.3.0): Mở Rộng Cụm Phân Tán (Kế Hoạch)** — k3s orchestration, HPA auto-scaling theo độ dài hàng đợi RabbitMQ, multi-region quorum check, và live WebSocket telemetry.
+- **Milestone 1 (v0.1.0): Lõi Phân Tán (Đã Hoàn Thành)** — Database schema, FastAPI Gateway, atomic Redis ZSET scheduler, idempotent checker, alert state machine, và dashboard cơ bản.
+- **Milestone 2 (v0.2.0): Vận Hành Production & SRE Observability (Đã Hoàn Thành)** — Caddy TLS proxy, Prometheus/Grafana RED metrics, GitHub Actions CI/CD, phân vùng PostgreSQL range partitioning, và k6 load test.
+- **Milestone 3 (v0.3.0): Khả Năng Chịu Lỗi Phân Tán & Live Telemetry (Đã Hoàn Thành)** — Multi-region quorum consensus verification, AMQP challenge topic exchange, Redis quorum voting aggregator, và live WebSocket telemetry stream.
 
 Chi tiết kỹ thuật: Xem [ROADMAP.vi.md](docs/ROADMAP.vi.md) và [SPEC.vi.md](docs/SPEC.vi.md).

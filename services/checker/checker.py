@@ -5,7 +5,7 @@ import logging
 import ssl
 import time
 import uuid
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse
 import httpx
 from services.alerter.quorum_engine import record_vote_and_evaluate, resolve_quorum_on_timeout
@@ -28,6 +28,7 @@ from services.common.transport import AntiRebindingTransport
 
 logger = logging.getLogger(__name__)
 
+_background_tasks: Set[asyncio.Task] = set()
 _httpx_client: Optional[httpx.AsyncClient] = None
 
 
@@ -367,7 +368,7 @@ async def process_check_job(payload: dict) -> bool:
                     await redis_client.delete(lock_key)
                     raise
 
-                asyncio.create_task(
+                task = asyncio.create_task(
                     resolve_quorum_on_timeout(
                         challenge_id=challenge_id,
                         monitor_id=monitor_id_str,
@@ -377,6 +378,8 @@ async def process_check_job(payload: dict) -> bool:
                         url=url,
                     )
                 )
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
             else:
                 active_cid = await redis_client.get(lock_key)
                 if active_cid:

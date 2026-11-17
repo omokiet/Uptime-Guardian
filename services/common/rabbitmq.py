@@ -6,6 +6,7 @@ from services.common.config import settings
 _robust_connection: Optional[aio_pika.abc.AbstractRobustConnection] = None
 _publish_channel: Optional[aio_pika.abc.AbstractChannel] = None
 _declared_queues: Set[str] = set()
+_declared_exchanges: Dict[str, aio_pika.abc.AbstractExchange] = {}
 
 
 async def get_rabbitmq_connection() -> aio_pika.abc.AbstractRobustConnection:
@@ -52,11 +53,13 @@ async def publish_message(
     )
 
     if exchange_name:
-        exchange = await channel.declare_exchange(
-            exchange_name,
-            aio_pika.ExchangeType.TOPIC,
-            durable=True,
-        )
+        if exchange_name not in _declared_exchanges:
+            _declared_exchanges[exchange_name] = await channel.declare_exchange(
+                exchange_name,
+                aio_pika.ExchangeType.TOPIC,
+                durable=True,
+            )
+        exchange = _declared_exchanges[exchange_name]
         await exchange.publish(
             message,
             routing_key=routing_key or queue_name,
@@ -100,6 +103,7 @@ async def close_rabbitmq() -> None:
             await _publish_channel.close()
         _publish_channel = None
     _declared_queues.clear()
+    _declared_exchanges.clear()
     if _robust_connection is not None and not _robust_connection.is_closed:
         await _robust_connection.close()
         _robust_connection = None
