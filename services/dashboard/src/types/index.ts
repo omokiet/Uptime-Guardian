@@ -32,6 +32,8 @@ export interface CheckResult {
   status_code: number | null;
   response_time_ms: number | null;
   is_success: boolean;
+  region_id?: string;
+  is_suppressed?: boolean;
   error_message: string | null;
   ssl_days_remaining: number | null;
   created_at: string;

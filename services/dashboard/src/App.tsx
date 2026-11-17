@@ -13,7 +13,11 @@ import {
   apiGetMe,
   apiGetMonitors,
 } from './api/client';
-import { TelemetryStatusChangeData, useWebSocketTelemetry } from './api/websocket';
+import {
+  TelemetryCheckResultData,
+  TelemetryStatusChangeData,
+  useWebSocketTelemetry,
+} from './api/websocket';
 import { AddMonitorModal } from './components/AddMonitorModal';
 import { AuthModal } from './components/AuthModal';
 import { MonitorCard } from './components/MonitorCard';
@@ -34,15 +38,24 @@ export const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'UP' | 'DOWN'>('ALL');
   const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(10000);
+  const [latestCheckResult, setLatestCheckResult] = useState<TelemetryCheckResultData | null>(null);
 
   const handleStatusChange = useCallback((data: TelemetryStatusChangeData) => {
     setMonitors((prev) =>
       prev.map((m) => (m.id === data.monitor_id ? { ...m, current_status: data.new_status } : m))
     );
+    setSelectedMonitor((prev) =>
+      prev && prev.id === data.monitor_id ? { ...prev, current_status: data.new_status } : prev
+    );
+  }, []);
+
+  const handleCheckResult = useCallback((data: TelemetryCheckResultData) => {
+    setLatestCheckResult(data);
   }, []);
 
   useWebSocketTelemetry({
     onStatusChange: handleStatusChange,
+    onCheckResult: handleCheckResult,
   });
 
   const fetchMonitors = useCallback(async () => {
@@ -319,6 +332,7 @@ export const App: React.FC = () => {
 
       <MonitorDetailModal
         monitor={selectedMonitor}
+        latestCheckResult={latestCheckResult}
         onClose={() => setSelectedMonitor(null)}
       />
     </div>

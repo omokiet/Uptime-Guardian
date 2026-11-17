@@ -86,29 +86,35 @@ class ConnectionManager:
 
     async def _redis_listener(self, user_id: str) -> None:
         channel_name = f"telemetry:user:{user_id}"
-        redis_client = get_redis_client()
-        pubsub = redis_client.pubsub()
-        await pubsub.subscribe(channel_name)
 
-        try:
-            async for item in pubsub.listen():
-                if item and item.get("type") == "message":
-                    raw_data = item.get("data")
-                    if raw_data:
-                        if isinstance(raw_data, bytes):
-                            raw_data = raw_data.decode("utf-8")
-                        payload = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
-                        await self.broadcast_to_user(user_id, payload)
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            logger.error("Redis Pub/Sub listener error on %s: %s", channel_name, exc)
-        finally:
+        while True:
+            async with self._lock:
+                if user_id not in self.active_connections:
+                    break
+
+            redis_client = get_redis_client()
+            pubsub = redis_client.pubsub()
             try:
-                await pubsub.unsubscribe(channel_name)
-                await pubsub.close()
-            except Exception:
-                pass
+                await pubsub.subscribe(channel_name)
+                async for item in pubsub.listen():
+                    if item and item.get("type") == "message":
+                        raw_data = item.get("data")
+                        if raw_data:
+                            if isinstance(raw_data, bytes):
+                                raw_data = raw_data.decode("utf-8")
+                            payload = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+                            await self.broadcast_to_user(user_id, payload)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("Redis Pub/Sub error on %s, reconnecting: %s", channel_name, exc)
+                await asyncio.sleep(1.0)
+            finally:
+                try:
+                    await pubsub.unsubscribe(channel_name)
+                    await pubsub.close()
+                except Exception:
+                    pass
 
 
 manager = ConnectionManager()

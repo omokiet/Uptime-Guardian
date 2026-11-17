@@ -1,16 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { ExternalLink, RefreshCw, X } from 'lucide-react';
 import { apiGetMonitor, apiGetMonitorHistory } from '../api/client';
+import { TelemetryCheckResultData } from '../api/websocket';
 import { CheckResult, Monitor, MonitorDetail } from '../types';
 import { LatencyChart } from './LatencyChart';
 import { StatusDot } from './ui/StatusDot';
 
 interface MonitorDetailModalProps {
   monitor: Monitor | null;
+  latestCheckResult?: TelemetryCheckResultData | null;
   onClose: () => void;
 }
 
-export const MonitorDetailModal: React.FC<MonitorDetailModalProps> = ({ monitor, onClose }) => {
+export const MonitorDetailModal: React.FC<MonitorDetailModalProps> = ({
+  monitor,
+  latestCheckResult,
+  onClose,
+}) => {
   const [detail, setDetail] = useState<MonitorDetail | null>(null);
   const [history, setHistory] = useState<CheckResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -39,6 +45,23 @@ export const MonitorDetailModal: React.FC<MonitorDetailModalProps> = ({ monitor,
     }, refreshInterval);
     return () => clearInterval(timer);
   }, [monitor, refreshInterval]);
+
+  useEffect(() => {
+    if (!latestCheckResult || !monitor || latestCheckResult.monitor_id !== monitor.id) return;
+    const newPoint: CheckResult = {
+      id: Date.now(),
+      monitor_id: latestCheckResult.monitor_id,
+      job_id: '',
+      status_code: latestCheckResult.status_code,
+      response_time_ms: latestCheckResult.response_time_ms,
+      is_success: latestCheckResult.is_success,
+      region_id: latestCheckResult.region_id,
+      error_message: latestCheckResult.error_message,
+      ssl_days_remaining: latestCheckResult.ssl_days_remaining,
+      created_at: new Date().toISOString(),
+    };
+    setHistory((prev) => [newPoint, ...prev.slice(0, 19)]);
+  }, [latestCheckResult, monitor]);
 
   if (!monitor) return null;
 
