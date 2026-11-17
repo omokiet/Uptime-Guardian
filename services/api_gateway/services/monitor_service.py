@@ -100,7 +100,7 @@ class MonitorService:
                 if total_rtt_checks > 0:
                     detail.avg_response_time_24h = int(round(weighted_sum / total_rtt_checks))
         elif recent_checks:
-            success_count = sum(1 for c in recent_checks if c.is_success)
+            success_count = sum(1 for c in recent_checks if (c.is_success or getattr(c, "is_suppressed", False)))
             detail.uptime_percentage_24h = round(Decimal((success_count / len(recent_checks)) * 100), 2)
             valid_rtts = [c.response_time_ms for c in recent_checks if c.response_time_ms is not None]
             if valid_rtts:
@@ -123,6 +123,23 @@ class MonitorService:
 
         update_data = monitor_in.model_dump(exclude_unset=True)
         was_active = monitor.is_active
+
+        effective_enabled = update_data.get("quorum_enabled", monitor.quorum_enabled)
+        effective_threshold = update_data.get("quorum_threshold", monitor.quorum_threshold)
+        effective_regions = update_data.get("quorum_regions", monitor.quorum_regions)
+
+        if effective_threshold is not None and effective_regions is not None:
+            if effective_threshold > len(effective_regions):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="quorum_threshold cannot exceed the number of quorum_regions",
+                )
+        if effective_enabled is True and effective_regions is not None:
+            if len(effective_regions) < 2:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="quorum_enabled requires at least 2 regions",
+                )
 
         for field, value in update_data.items():
             setattr(monitor, field, value)

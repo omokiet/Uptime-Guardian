@@ -2,7 +2,15 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from services.common.ssrf import validate_target_url
 
 
@@ -36,12 +44,38 @@ class MonitorBase(BaseModel):
     timeout_seconds: int = Field(default=10, ge=1, le=120)
     expected_status_code: int = Field(default=200, ge=100, le=599)
     consecutive_threshold: int = Field(default=3, ge=1, le=10)
+    quorum_enabled: bool = False
+    quorum_threshold: int = Field(default=2, ge=1, le=10)
+    quorum_regions: List[str] = Field(default_factory=lambda: ["vn-han", "sg-sin", "us-iad"])
     is_active: bool = True
 
     @field_validator("url")
     @classmethod
     def check_url_safety(cls, value: str) -> str:
         return validate_target_url(value)
+
+    @field_validator("quorum_enabled", mode="before")
+    @classmethod
+    def default_quorum_enabled(cls, value: Optional[bool]) -> bool:
+        return False if value is None else value
+
+    @field_validator("quorum_threshold", mode="before")
+    @classmethod
+    def default_quorum_threshold(cls, value: Optional[int]) -> int:
+        return 2 if value is None else value
+
+    @field_validator("quorum_regions", mode="before")
+    @classmethod
+    def default_quorum_regions(cls, value: Optional[List[str]]) -> List[str]:
+        return ["vn-han", "sg-sin", "us-iad"] if not value else value
+
+    @model_validator(mode="after")
+    def validate_quorum_settings(self) -> "MonitorBase":
+        if self.quorum_threshold > len(self.quorum_regions):
+            raise ValueError("quorum_threshold cannot exceed the number of quorum_regions")
+        if self.quorum_enabled and len(self.quorum_regions) < 2:
+            raise ValueError("quorum_enabled requires at least 2 regions")
+        return self
 
 
 class MonitorCreate(MonitorBase):
@@ -56,6 +90,9 @@ class MonitorUpdate(BaseModel):
     timeout_seconds: Optional[int] = Field(default=None, ge=1, le=120)
     expected_status_code: Optional[int] = Field(default=None, ge=100, le=599)
     consecutive_threshold: Optional[int] = Field(default=None, ge=1, le=10)
+    quorum_enabled: Optional[bool] = None
+    quorum_threshold: Optional[int] = Field(default=None, ge=1, le=10)
+    quorum_regions: Optional[List[str]] = None
     is_active: Optional[bool] = None
 
     @field_validator("url")
@@ -64,6 +101,16 @@ class MonitorUpdate(BaseModel):
         if value is not None:
             return validate_target_url(value)
         return value
+
+    @model_validator(mode="after")
+    def validate_quorum_settings(self) -> "MonitorUpdate":
+        if self.quorum_regions is not None and self.quorum_threshold is not None:
+            if self.quorum_threshold > len(self.quorum_regions):
+                raise ValueError("quorum_threshold cannot exceed the number of quorum_regions")
+        if self.quorum_enabled is True and self.quorum_regions is not None:
+            if len(self.quorum_regions) < 2:
+                raise ValueError("quorum_enabled requires at least 2 regions")
+        return self
 
 
 class MonitorResponse(MonitorBase):
@@ -84,6 +131,8 @@ class CheckResultResponse(BaseModel):
     status_code: Optional[int]
     response_time_ms: Optional[int]
     is_success: bool
+    region_id: str = "vn-han"
+    is_suppressed: bool = False
     error_message: Optional[str]
     ssl_days_remaining: Optional[int]
     created_at: datetime

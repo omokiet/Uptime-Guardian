@@ -9,12 +9,14 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     Uuid,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from services.common.database import Base
 
@@ -75,6 +77,13 @@ class Monitor(Base):
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     expected_status_code: Mapped[int] = mapped_column(Integer, default=200, nullable=False)
     consecutive_threshold: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    quorum_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    quorum_threshold: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    quorum_regions: Mapped[List[str]] = mapped_column(
+        ARRAY(String(32)).with_variant(JSON, "sqlite"),
+        default=lambda: ["vn-han", "sg-sin", "us-iad"],
+        nullable=False,
+    )
     current_status: Mapped[str] = mapped_column(String(20), default="UNKNOWN", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -136,6 +145,8 @@ class CheckResult(Base):
     status_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     response_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    region_id: Mapped[str] = mapped_column(String(32), default="vn-han", nullable=False)
+    is_suppressed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     ssl_days_remaining: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -148,6 +159,7 @@ class CheckResult(Base):
 
     __table_args__ = (
         Index("idx_check_results_monitor_created", "monitor_id", created_at.desc()),
+        Index("ix_check_results_region_created", "region_id", created_at.desc()),
     )
 
 

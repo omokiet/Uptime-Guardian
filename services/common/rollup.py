@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from services.common.models import CheckResult, HourlyUptimeSummary
 from services.common.partitions import _get_dialect_name, drop_expired_partitions
@@ -24,7 +24,12 @@ async def aggregate_hourly_uptime(
         select(
             CheckResult.monitor_id,
             func.count(CheckResult.id).label("total_checks"),
-            func.sum(case((CheckResult.is_success.is_(True), 1), else_=0)).label("success_checks"),
+            func.sum(
+                case(
+                    (or_(CheckResult.is_success.is_(True), CheckResult.is_suppressed.is_(True)), 1),
+                    else_=0,
+                )
+            ).label("success_checks"),
             func.coalesce(func.avg(CheckResult.response_time_ms), 0).label("avg_rtt"),
         )
         .where(
