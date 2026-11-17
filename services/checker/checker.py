@@ -8,6 +8,7 @@ import uuid
 from typing import Any, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 import httpx
+from services.alerter.quorum_engine import record_vote_and_evaluate, resolve_quorum_on_timeout
 from services.common.config import settings
 from services.common.database import AsyncSessionLocal
 from services.common.metrics import (
@@ -314,6 +315,7 @@ async def process_check_job(payload: dict) -> bool:
                 session_key = f"quorum:session:{challenge_id}"
                 pipe = redis_client.pipeline()
                 pipe.hset(session_key, settings.REGION_ID, json.dumps(initiator_vote))
+                pipe.hset(session_key, "_initiator_job_id", job_id_str)
                 pipe.expire(session_key, settings.QUORUM_SESSION_TTL_SECONDS)
                 await pipe.execute()
 
@@ -321,6 +323,7 @@ async def process_check_job(payload: dict) -> bool:
                     "challenge_id": challenge_id,
                     "monitor_id": monitor_id_str,
                     "initiator_region": settings.REGION_ID,
+                    "initiator_job_id": job_id_str,
                     "url": url,
                     "method": payload.get("method", "GET"),
                     "expected_status_code": payload.get("expected_status_code", 200),
@@ -340,11 +343,21 @@ async def process_check_job(payload: dict) -> bool:
                 except Exception:
                     await redis_client.delete(lock_key)
                     raise
+
+                asyncio.create_task(
+                    resolve_quorum_on_timeout(
+                        challenge_id=challenge_id,
+                        monitor_id=monitor_id_str,
+                        initiator_job_id=job_id_str,
+                        quorum_threshold=payload.get("quorum_threshold", 2),
+                        quorum_regions=payload.get("quorum_regions", ["vn-han", "sg-sin", "us-iad"]),
+                        url=url,
+                    )
+                )
             else:
                 active_cid = await redis_client.get(lock_key)
                 if active_cid:
                     cid_str = active_cid.decode("utf-8") if isinstance(active_cid, bytes) else str(active_cid)
-                    session_key = f"quorum:session:{cid_str}"
                     supp_vote = {
                         "status": "FAIL",
                         "status_code": status_code,
@@ -352,10 +365,17 @@ async def process_check_job(payload: dict) -> bool:
                         "error_message": error_msg,
                         "voted_at_utc": datetime.now(timezone.utc).isoformat(),
                     }
-                    pipe = redis_client.pipeline()
-                    pipe.hset(session_key, settings.REGION_ID, json.dumps(supp_vote))
-                    pipe.expire(session_key, settings.QUORUM_SESSION_TTL_SECONDS)
-                    await pipe.execute()
+                    await record_vote_and_evaluate(
+                        challenge_id=cid_str,
+                        monitor_id=monitor_id_str,
+                        initiator_job_id=job_id_str,
+                        region_id=settings.REGION_ID,
+                        vote_data=supp_vote,
+                        quorum_threshold=payload.get("quorum_threshold", 2),
+                        quorum_regions=payload.get("quorum_regions", ["vn-han", "sg-sin", "us-iad"]),
+                        url=url,
+                        redis_client=redis_client,
+                    )
         else:
             alert_event = {
                 "job_id": job_id_str,

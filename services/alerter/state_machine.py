@@ -106,7 +106,7 @@ async def handle_alert_event(event: dict) -> None:
             if is_success:
                 if current_status == "DOWN":
                     msg_to_notify = (
-                        f"✅ *[RECOVERY] Dịch vụ đã hoạt động trở lại*\n"
+                        f"*[RECOVERY] Dịch vụ đã hoạt động trở lại*\n"
                         f"• *Tên:* {monitor_name}\n"
                         f"• *URL:* {url}\n"
                         f"• *Thời gian:* `{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}`"
@@ -116,7 +116,13 @@ async def handle_alert_event(event: dict) -> None:
                 consecutive_fails = 0
                 cooldown_until = 0
             else:
-                consecutive_fails += 1
+                quorum_confirmed = bool(event.get("quorum_confirmed", False))
+                if quorum_confirmed:
+                    # Quorum consensus confirms outage across regions, bypass remaining threshold attempts
+                    consecutive_fails = max(consecutive_fails + 1, threshold)
+                else:
+                    consecutive_fails += 1
+
                 if consecutive_fails < threshold:
                     current_status = "PENDING_DOWN"
                 else:
@@ -125,7 +131,7 @@ async def handle_alert_event(event: dict) -> None:
                         cooldown_ms = settings.COOLDOWN_MINUTES * 60 * 1000
                         cooldown_until = now_ms + cooldown_ms
                         msg_to_notify = (
-                            f"🚨 *[DOWN ALERT] Dịch vụ ngừng hoạt động*\n"
+                            f"*[DOWN ALERT] Dịch vụ ngừng hoạt động*\n"
                             f"• *Tên:* {monitor_name}\n"
                             f"• *URL:* {url}\n"
                             f"• *Lỗi:* {error_msg}\n"

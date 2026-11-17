@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Any, Dict
 from pydantic import ValidationError
+from services.alerter.quorum_engine import record_vote_and_evaluate
 from services.checker.checker import execute_check
 from services.common.config import settings
 from services.common.metrics import CHECKER_PROCESSING_ERRORS_TOTAL
@@ -49,11 +50,17 @@ async def process_quorum_challenge(
         "voted_at_utc": datetime.now(timezone.utc).isoformat(),
     }
 
-    session_key = f"quorum:session:{challenge.challenge_id}"
-    pipe = redis_client.pipeline()
-    pipe.hset(session_key, settings.REGION_ID, json.dumps(vote))
-    pipe.expire(session_key, settings.QUORUM_SESSION_TTL_SECONDS)
-    await pipe.execute()
+    await record_vote_and_evaluate(
+        challenge_id=challenge.challenge_id,
+        monitor_id=challenge.monitor_id,
+        initiator_job_id=challenge.initiator_job_id or "",
+        region_id=settings.REGION_ID,
+        vote_data=vote,
+        quorum_threshold=challenge.quorum_threshold,
+        quorum_regions=challenge.quorum_regions,
+        url=challenge.url,
+        redis_client=redis_client,
+    )
 
     return True
 

@@ -187,6 +187,7 @@ class QuorumChallengeMessage(BaseModel):
     challenge_id: str
     monitor_id: str
     initiator_region: str
+    initiator_job_id: Optional[str] = None
     url: str
     method: str = "GET"
     expected_status_code: int = 200
