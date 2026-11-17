@@ -103,6 +103,7 @@ async def process_due_monitors(limit: int = 100) -> int:
         payload = {
             "job_id": str(job_id),
             "monitor_id": str(monitor.id),
+            "user_id": str(monitor.user_id) if getattr(monitor, "user_id", None) else None,
             "url": monitor.url,
             "method": monitor.method,
             "timeout_seconds": monitor.timeout_seconds,

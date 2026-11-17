@@ -294,6 +294,29 @@ async def process_check_job(payload: dict) -> bool:
             session.add(check_result)
             await session.commit()
 
+        user_id_str = payload.get("user_id")
+        if user_id_str:
+            telemetry_frame = {
+                "event": "check_result",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "data": {
+                    "monitor_id": monitor_id_str,
+                    "region_id": settings.REGION_ID,
+                    "status_code": status_code,
+                    "response_time_ms": latency_ms,
+                    "is_success": is_success,
+                    "error_message": error_msg,
+                    "ssl_days_remaining": ssl_days,
+                },
+            }
+            try:
+                await redis_client.publish(
+                    f"telemetry:user:{user_id_str}",
+                    json.dumps(telemetry_frame),
+                )
+            except Exception as exc:
+                logger.error("Failed to publish telemetry to Redis: %s", exc)
+
         quorum_enabled = payload.get("quorum_enabled", False)
         if not is_success and quorum_enabled:
             lock_key = f"quorum:active:{monitor_id_str}"

@@ -1,4 +1,7 @@
 import asyncio
+from datetime import datetime, timezone
+import json
+import logging
 import time
 import uuid
 from sqlalchemy import select
@@ -7,6 +10,8 @@ from services.common.config import settings
 from services.common.database import AsyncSessionLocal
 from services.common.models import AlertConfig, Monitor
 from services.common.redis_client import get_redis_client
+
+logger = logging.getLogger(__name__)
 
 
 LUA_SAFE_UNLOCK = """
@@ -85,6 +90,7 @@ async def handle_alert_event(event: dict) -> None:
         state_data = await redis_client.hgetall(state_key)
 
         current_status = state_data.get("status", "UNKNOWN")
+        previous_status = current_status
         consecutive_fails = int(state_data.get("consecutive_fails", 0))
         cooldown_until = int(state_data.get("cooldown_until", 0))
 
@@ -152,6 +158,25 @@ async def handle_alert_event(event: dict) -> None:
             if mon:
                 mon.current_status = current_status
                 await session.commit()
+
+            if current_status != previous_status and mon and getattr(mon, "user_id", None):
+                status_event = {
+                    "event": "status_change",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "data": {
+                        "monitor_id": monitor_id_str,
+                        "previous_status": previous_status,
+                        "new_status": current_status,
+                        "reason": error_msg if current_status == "DOWN" else "Service recovered",
+                    },
+                }
+                try:
+                    await redis_client.publish(
+                        f"telemetry:user:{mon.user_id}",
+                        json.dumps(status_event),
+                    )
+                except Exception as exc:
+                    logger.error("Failed to publish status_change telemetry: %s", exc)
 
         if msg_to_notify:
             await notify_channels(m_uuid, monitor_name, msg_to_notify)

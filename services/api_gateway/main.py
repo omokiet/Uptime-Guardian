@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from services.api_gateway.routers import alerts, auth, monitors
+from services.api_gateway.routers import alerts, auth, monitors, websocket
 from services.common.metrics import (
     API_HTTP_REQUESTS_TOTAL,
     API_HTTP_REQUEST_DURATION_SECONDS,
@@ -91,3 +91,4 @@ async def root():
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(monitors.router, prefix="/api/v1")
 app.include_router(alerts.router, prefix="/api/v1")
+app.include_router(websocket.router)
