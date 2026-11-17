@@ -3,6 +3,7 @@ import json
 import logging
 import prometheus_client
 from services.checker.checker import close_httpx_client, process_check_job
+from services.checker.quorum_consumer import run_quorum_consumer
 from services.common.config import settings
 from services.common.metrics import CHECKER_PROCESSING_ERRORS_TOTAL
 from services.common.rabbitmq import close_rabbitmq, get_rabbitmq_connection
@@ -47,7 +48,10 @@ async def run_checker_worker() -> None:
 async def main() -> None:
     start_metrics_server(8001)
     try:
-        await run_checker_worker()
+        await asyncio.gather(
+            run_checker_worker(),
+            run_quorum_consumer(),
+        )
     finally:
         await close_httpx_client()
         await close_redis()

@@ -181,3 +181,21 @@ class AlertConfigResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class QuorumChallengeMessage(BaseModel):
+    challenge_id: str
+    monitor_id: str
+    initiator_region: str
+    url: str
+    method: str = "GET"
+    expected_status_code: int = 200
+    timeout_seconds: int = 5
+    quorum_threshold: int = 2
+    quorum_regions: List[str] = Field(default_factory=lambda: ["vn-han", "sg-sin", "us-iad"])
+    created_at_utc: datetime
+
+    @field_validator("url")
+    @classmethod
+    def check_challenge_url_safety(cls, value: str) -> str:
+        return validate_target_url(value)

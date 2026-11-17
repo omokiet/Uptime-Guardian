@@ -156,6 +156,7 @@ async def test_checker_worker_execution():
         assert mock_process.called
 
     with patch("services.checker.main.run_checker_worker", new_callable=AsyncMock), \
+         patch("services.checker.main.run_quorum_consumer", new_callable=AsyncMock), \
          patch("services.checker.main.close_redis", new_callable=AsyncMock) as mock_redis, \
          patch("services.checker.main.close_rabbitmq", new_callable=AsyncMock) as mock_rmq:
         await checker_main()

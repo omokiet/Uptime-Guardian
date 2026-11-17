@@ -1,5 +1,7 @@
 import asyncio
-import datetime
+from datetime import datetime, timezone
+import json
+import logging
 import ssl
 import time
 import uuid
@@ -22,6 +24,8 @@ from services.common.ssrf import (
     validate_target_url,
 )
 from services.common.transport import AntiRebindingTransport
+
+logger = logging.getLogger(__name__)
 
 _httpx_client: Optional[httpx.AsyncClient] = None
 
@@ -73,11 +77,11 @@ async def check_ssl_days(
             cert = ssl_object.getpeercert() if ssl_object else None
 
         if cert and "notAfter" in cert:
-            expire_date = datetime.datetime.strptime(
+            expire_date = datetime.strptime(
                 cert["notAfter"],
                 "%b %d %H:%M:%S %Y %Z",
-            ).replace(tzinfo=datetime.timezone.utc)
-            delta = expire_date - datetime.datetime.now(datetime.timezone.utc)
+            ).replace(tzinfo=timezone.utc)
+            delta = expire_date - datetime.now(timezone.utc)
             return max(0, delta.days)
     except Exception:
         return None
@@ -284,20 +288,86 @@ async def process_check_job(payload: dict) -> bool:
                 is_success=is_success,
                 error_message=error_msg,
                 ssl_days_remaining=ssl_days,
+                region_id=settings.REGION_ID,
             )
             session.add(check_result)
             await session.commit()
 
-        alert_event = {
-            "job_id": job_id_str,
-            "monitor_id": monitor_id_str,
-            "url": url,
-            "is_success": is_success,
-            "status_code": status_code,
-            "response_time_ms": latency_ms,
-            "error_message": error_msg,
-        }
-        await publish_message(settings.RABBITMQ_QUEUE_ALERT_EVENTS, alert_event)
+        quorum_enabled = payload.get("quorum_enabled", False)
+        if not is_success and quorum_enabled:
+            lock_key = f"quorum:active:{monitor_id_str}"
+            challenge_id = str(uuid.uuid4())
+            acquired = await redis_client.set(
+                lock_key,
+                challenge_id,
+                ex=settings.QUORUM_LOCK_TTL_SECONDS,
+                nx=True,
+            )
+            if acquired:
+                initiator_vote = {
+                    "status": "FAIL",
+                    "status_code": status_code,
+                    "response_time_ms": latency_ms,
+                    "error_message": error_msg,
+                    "voted_at_utc": datetime.now(timezone.utc).isoformat(),
+                }
+                session_key = f"quorum:session:{challenge_id}"
+                pipe = redis_client.pipeline()
+                pipe.hset(session_key, settings.REGION_ID, json.dumps(initiator_vote))
+                pipe.expire(session_key, settings.QUORUM_SESSION_TTL_SECONDS)
+                await pipe.execute()
+
+                challenge_payload = {
+                    "challenge_id": challenge_id,
+                    "monitor_id": monitor_id_str,
+                    "initiator_region": settings.REGION_ID,
+                    "url": url,
+                    "method": payload.get("method", "GET"),
+                    "expected_status_code": payload.get("expected_status_code", 200),
+                    "timeout_seconds": min(payload.get("timeout_seconds", 10), 5),
+                    "quorum_threshold": payload.get("quorum_threshold", 2),
+                    "quorum_regions": payload.get("quorum_regions", ["vn-han", "sg-sin", "us-iad"]),
+                    "created_at_utc": datetime.now(timezone.utc).isoformat(),
+                }
+                try:
+                    await publish_message(
+                        queue_name=f"{settings.RABBITMQ_QUEUE_QUORUM_PREFIX}.all",
+                        payload=challenge_payload,
+                        exchange_name=settings.RABBITMQ_EXCHANGE_QUORUM,
+                        routing_key="challenge.all",
+                        expiration="20000",
+                    )
+                except Exception:
+                    await redis_client.delete(lock_key)
+                    raise
+            else:
+                active_cid = await redis_client.get(lock_key)
+                if active_cid:
+                    cid_str = active_cid.decode("utf-8") if isinstance(active_cid, bytes) else str(active_cid)
+                    session_key = f"quorum:session:{cid_str}"
+                    supp_vote = {
+                        "status": "FAIL",
+                        "status_code": status_code,
+                        "response_time_ms": latency_ms,
+                        "error_message": error_msg,
+                        "voted_at_utc": datetime.now(timezone.utc).isoformat(),
+                    }
+                    pipe = redis_client.pipeline()
+                    pipe.hset(session_key, settings.REGION_ID, json.dumps(supp_vote))
+                    pipe.expire(session_key, settings.QUORUM_SESSION_TTL_SECONDS)
+                    await pipe.execute()
+        else:
+            alert_event = {
+                "job_id": job_id_str,
+                "monitor_id": monitor_id_str,
+                "url": url,
+                "is_success": is_success,
+                "status_code": status_code,
+                "response_time_ms": latency_ms,
+                "error_message": error_msg,
+            }
+            await publish_message(settings.RABBITMQ_QUEUE_ALERT_EVENTS, alert_event)
+
         await redis_client.set(f"check:processed:{job_id_str}", "1", ex=300)
     finally:
         await redis_client.delete(in_flight_lock)

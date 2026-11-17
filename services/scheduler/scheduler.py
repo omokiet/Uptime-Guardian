@@ -107,6 +107,9 @@ async def process_due_monitors(limit: int = 100) -> int:
             "method": monitor.method,
             "timeout_seconds": monitor.timeout_seconds,
             "expected_status_code": monitor.expected_status_code,
+            "quorum_enabled": getattr(monitor, "quorum_enabled", False),
+            "quorum_threshold": getattr(monitor, "quorum_threshold", 2),
+            "quorum_regions": getattr(monitor, "quorum_regions", ["vn-han", "sg-sin", "us-iad"]),
         }
         active_monitors.append(monitor)
         publish_tasks.append(publish_message(settings.RABBITMQ_QUEUE_CHECK_JOBS, payload))

@@ -451,6 +451,7 @@ async def test_checker_worker_and_main():
 
     with patch("services.checker.main.get_rabbitmq_connection", return_value=mock_conn), \
          patch("services.checker.main.process_check_job", new_callable=AsyncMock) as mock_process, \
+         patch("services.checker.main.run_quorum_consumer", new_callable=AsyncMock), \
          patch("services.checker.main.start_metrics_server") as mock_metrics_srv, \
          patch("services.checker.main.close_httpx_client", new_callable=AsyncMock), \
          patch("services.checker.main.close_redis", new_callable=AsyncMock), \

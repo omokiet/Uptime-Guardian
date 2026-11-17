@@ -8,6 +8,12 @@ class Settings(BaseSettings):
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
     RABBITMQ_QUEUE_CHECK_JOBS: str = "check.jobs"
     RABBITMQ_QUEUE_ALERT_EVENTS: str = "alert.events"
+    REGION_ID: str = "vn-han"
+    RABBITMQ_EXCHANGE_QUORUM: str = "quorum.exchange"
+    RABBITMQ_QUEUE_QUORUM_PREFIX: str = "quorum.challenges"
+    QUORUM_CHALLENGE_TIMEOUT_SECONDS: float = 15.0
+    QUORUM_LOCK_TTL_SECONDS: int = 30
+    QUORUM_SESSION_TTL_SECONDS: int = 60
 
     SECRET_KEY: str = "dev-secret-key-change-in-production-min-32-chars"
     ALGORITHM: str = "HS256"
